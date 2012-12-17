@@ -1,0 +1,1830 @@
+swift (1.7.6~rax5) lucid; urgency=low
+
+  * Backport of https://review.openstack.org/#/c/17237/
+
+ -- Gregory Holt <gholt@rackspace.com>  Fri, 07 Dec 2012 01:46:57 +0000
+
+swift (1.7.6~rax4) lucid; urgency=low
+
+  * Packaging the gerrit/milestone-proposed branch at commit
+    4927185fa8f3397a55cb4fb90f3b9cd10c23ab5d
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 12 Nov 2012 15:44:04 +0000
+
+swift (1.7.6~rax3) lucid; urgency=low
+
+  * Packaging at commit 34ca0f097c0607c1dd6610e3fad6eebaa11fe11c
+
+ -- Gregory Holt <gholt@rackspace.com>  Fri, 09 Nov 2012 19:27:07 +0000
+
+swift (1.7.6~rax2) lucid; urgency=low
+
+  * Packaging at commit 2194897e3749df2652bc6c9609a769d874350380
+
+ -- Gregory Holt <gholt@rackspace.com>  Fri, 09 Nov 2012 00:13:14 +0000
+
+swift (1.7.6~rax1) lucid; urgency=low
+
+  * Packaging at commit 0ab0c813c0e8388b813d1fa624247b54cf42ec73
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 08 Nov 2012 17:05:51 +0000
+
+swift (1.7.5~rax3) lucid; urgency=low
+
+  * Bug fixes only.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 01 Nov 2012 19:10:19 +0000
+
+swift (1.7.5~rax2) lucid; urgency=low
+
+  * Packaging a prerelease of 1.7.5 at commit
+    1f232e19cfb1c662c891d73d4251c6a262d74921
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 29 Oct 2012 20:41:46 +0000
+
+swift (1.7.1~rax2) lucid; urgency=low
+
+  * Packaging a prerelease of 1.7.1, see the branch at:
+    https://github.com/rackspace/swift/tree/pkg1.7.1tilderax2
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 18 Sep 2012 19:17:14 +0000
+
+swift (1.7.1~rax1) lucid; urgency=low
+
+  * Packaging a prerelease of 1.7.1, see the branch at:
+    https://github.com/rackspace/swift/tree/pkg1.7.1tilderax1
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 18 Sep 2012 15:33:12 +0000
+
+swift (1.7.0-1) lucid; urgency=low
+
+  * Packaging OpenStack Swift 1.7.0 release (commit
+    341da755744d9be62e1a52200428d4531aa82e36)
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 04 Sep 2012 18:32:40 +0000
+
+swift (1.6.0-6) lucid; urgency=low
+
+  * Packaging OpenStack Swift 1.6.0 release.
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 30 Jul 2012 02:22:25 +0000
+
+swift (1.5.0-rax1-1) lucid; urgency=low
+
+  * Fix bug with proxy logging and no content-length/transfer-encoding.
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 12 Jun 2012 21:01:13 +0000
+
+swift (1.5.0-3) lucid; urgency=low
+
+  * Bugfixes in proxy-logging, make_preauthed_*, and recon based on QA findings
+
+  * Bugfix in object server to fix issue where clients could be starved under concurrency
+
+ -- John Dickinson <me@not.mn>  Fri, 01 Jun 2012 23:37:38 +0000
+
+swift (1.5.0-2) lucid; urgency=low
+
+  * Fixed bugs in make_pre_authed_request and make_pre_auth
+
+ -- John Dickinson <me@not.mn>  Thu, 31 May 2012 19:01:47 +0000
+
+swift (1.5.0-1) lucid; urgency=low
+
+  Note: This changelog entry includes information from the 1.4.9 series
+
+  * New option to toggle SQLite database preallocation with account
+    and container servers.
+
+    IMPORTANT:
+    The default for database preallocation is now off when before
+    it was always on. This will affect performance on clusters that
+    use standard drives with shared account, container, object
+    servers. Such deployments will need to update their
+    configurations to turn database preallocation back on (see
+    account-server.conf-sample and container-server.conf.sample
+    files).
+
+    If you are using dedicated account and container servers with
+    SSDs, you should defragment your file systems after upgrade and
+    should notice dramatically less disk usage.
+
+  * swift3 middleware removed and moved to http://github.com/fujita/swift3.
+    This will require a config change in the proxy server and adds a new
+    dependency for deployers using this middleware.
+
+  * Moved proxy server logging to middleware. This requires a config change
+    in the proxy server.
+
+  * Added object versioning feature. (See docs for full description)
+
+  * Add statsd logging throughout the system (beta, some event names may
+    change)
+
+  * Expanded swift-recon middleware support
+
+  * The ring builder now supports as-unique-as-possible partition
+    placement, unified balancing methods, and can work on more than one
+    device at a time.
+
+  * Numerous bug fixes to StaticWeb (previously unusable at scale).
+
+  * Bug fixes to all middleware to allow passthrough requests under various
+    conditions and to share pre-authed request code (which previously had
+    differing behaviors and interaction bugs).
+
+  * Bug fix to object expirer that could cause infinite looping.
+
+  * Added optional delay to account reaping.
+
+  * Async-pending write optimization.
+
+  * Dispersion tools now support multiple auth versions
+
+  * Updated man pages
+
+  * Proxy server can now deny requests to particular hostnames
+
+  * Updated docs for domain remap middleware
+
+  * Updated docs for cname lookup middleware
+
+  * Made swift CLI binary easier to wrap
+
+  * Proxy will now also return X-Timestamp header
+
+  * Added associated projects doc as a place to track ecosystem projects
+
+  * end_marker made consistent across both object and container listings
+
+  * Various other minor bug fixes and improvements
+
+ -- John Dickinson <me@not.mn>  Tue, 29 May 2012 16:59:31 +0000
+
+swift (1.4.9-rax4-3) lucid; urgency=low
+
+  * adding earlier patch to wsgi.py
+
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 10 May 2012 15:25:00 -0700
+
+swift (1.4.9-rax4-2) lucid; urgency=low
+
+  * Patching wsgi.py make_pre_authed_env from swift commit
+    a1910461a01760eadc86ea3ff64af9b67f8032d6
+
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 10 May 2012 13:51:35 -0700
+
+swift (1.4.9-rax4-1) lucid; urgency=low
+
+    * Remix of 1.4.9-rax3-1 (which had just been an early packaging test).
+
+ -- Gregory Holt <gholt@lucid.localdomain>  Thu, 26 Apr 2012 19:30:46 +0000
+
+swift (1.4.9-rax3-1) lucid; urgency=low
+
+    * One last db_preallocation spot updated to be toggleable (replicators).
+
+    * WSGI preauth fixes (for sos).
+
+    * Fix with delete versioned objects with missing versioned container.
+
+    * X-Timestamp returned with proxy requests.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 26 Apr 2012 19:06:45 +0000
+
+swift (1.4.9-rax2-1) lucid; urgency=low
+
+    * Quick fixes manifest/versioning and dispersion tools.
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 02 Apr 2012 19:17:46 +0000
+
+swift (1.4.9-1) lucid; urgency=low
+
+    * Optional object versioning feature. (See docs for full description)
+
+    * Numerous bug fixes to StaticWeb (previously unusable at scale).
+
+    * Bug fixes to all middleware to allow passthrough requests under various
+      conditions and to share pre-authed request code (which previously had
+      differing behaviors and interaction bugs).
+
+    * Bug fix to object expirer that could cause infinite looping.
+
+    * Option to disable SQLite database preallocation with account and
+      container servers.
+
+    * Optional delay to account reaping.
+
+    * Overall disk usage reporting with swift-recon.
+
+    * Async-pending write optimization.
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 02 Apr 2012 15:13:22 +0000
+
+swift (1.4.8-1) lucid; urgency=low
+
+    * Added optional max_containers_per_account restriction
+
+    * Added alternate metadata header removal method
+
+    * Added optional name_check middleware filter
+
+    * Added support for venv-based test runs with tox
+
+    * StaticWeb behavior change with X-Web-Mode: true and
+      non-StaticWeb-enabled containers (immediately 404s instead of passing
+      the request on down the WSGI pipeline).
+
+    * Fixed typo in swift-dispersion-report JSON output.
+
+    * Swift-Recon-related fix to create temporary files on the same disk as
+      their final destinations.
+
+    * Updated return codes in swift3 middleware
+
+    * Fixed swift3 middleware to allow Content-Range header in response
+
+    * Updated swift.common.client and swift CLI tool with auth 2.0 changes
+
+    * Swift CLI tool now supports common openstack auth args
+
+    * Body of HTTP responses now included in error messages of swift CLI tool
+
+    * Refactored some ring building functions for clarity and simplicity
+
+ -- John Dickinson <me@not.mn>  Mon, 19 Mar 2012 21:41:11 +0000
+
+swift (1.4.7-3) lucid; urgency=low
+
+  * Internal release based on commit 7443f08f69bfc53e8d7691895f2e14d13119ddde
+
+  * StaticWeb behavior change with X-Web-Mode: true and non-StaticWeb-enabled
+    containers (immediately 404s instead of passing the request on down the
+    WSGI pipeline).
+
+  * Changed bin/swift argument names per http://wiki.openstack.org/CLIAuth
+
+  * Swift-Recon-related fix to create temporary files on the same disk as their
+    final destinations.
+
+  * Fixed typo in swift-dispersion-report JSON output.
+
+  * Swift3 middleware fixes: NoSuchBucket/Key on 404s and Content-Range
+    headers.
+
+  * Slightly better error reporting with bin/swift.
+
+  * New name_check WSGI middleware if you want to restrict names further.
+
+  * Added tox support; mainly for continuous integration set ups.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 15 Mar 2012 03:20:18 +0000
+
+swift (1.4.7-2) lucid; urgency=low
+
+  * Repackaged with Swift CHANGELOG updated.
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 06 Mar 2012 21:52:05 +0000
+
+swift (1.4.7-1) lucid; urgency=low
+
+  * Improvements to account and container replication.
+
+  * Fix for account servers allowing .pending to exist before .db.
+
+  * Fixed possible key-guessing exploit in formpost.
+
+  * Fixed bug in ring builder when removing a large percentage of devices.
+
+  * New JSON output option for swift-dispersion-report.
+
+  * Removed old stats tools.
+
+  * Other bug fixes and documentation updates.
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 06 Mar 2012 21:10:29 +0000
+
+swift (1.4.6-1) lucid; urgency=low
+
+  * TempURL and FormPost middleware added
+
+  * Added memcache.conf option
+
+  * Dropped eval-based json parser fallback
+
+  * Properly lose all groups when dropping privileges
+
+  * Fix permissions when creating files
+
+  * Fixed bug regarding negative Content-Length in requests
+
+  * Consistent formatting on Last-Modified response header
+
+  * Added timeout option to swift-recon
+
+  * Allow arguments to be passed to nosetest
+
+  * Removed tools/rfc.sh
+
+  * Other minor bug fixes
+
+ -- John Dickinson <me@not.mn>  Wed, 08 Feb 2012 22:04:20 +0000
+
+swift (1.4.5-4) lucid; urgency=low
+
+  * Fixed packaging to reduce size of the repo
+
+ -- John Dickinson <me@not.mn>  Mon, 09 Jan 2012 16:58:43 +0000
+
+swift (1.4.5-3) lucid; urgency=low
+
+  * Added swift-orphans.
+
+  * Added swift-oldies.
+
+  * Added object-expirer.conf-sample.
+
+ -- Gregory Holt <gholt@rackspace.com>  Wed, 04 Jan 2012 21:53:57 +0000
+
+swift (1.4.5-2) lucid; urgency=low
+
+  * Packaging fix because of a already locally deployed 1.4.5-1.
+
+ -- Gregory Holt <gholt@rackspace.com>  Wed, 04 Jan 2012 21:39:03 +0000
+
+swift (1.4.5-1) lucid; urgency=low
+
+  * New swift-orphans and swift-oldies command line tools to detect
+    orphaned Swift processes and long running processes.
+
+  * Command line tool "swift" now supports marker queries.
+
+  * StaticWeb middleware improved to save an extra request when
+    possible.
+
+  * Updated swift-init to support swift-object-expirer.
+
+  * Fixed object replicator timeout handling [bug 814263].
+
+  * Fixed accept header 503 vs. 400 [bug 891247].
+
+  * More exception handling for auditors.
+
+  * Doc updates for PPA [bug 905608].
+
+  * Doc updates to explain replication more clearly [bug 906976].
+
+  * Updated SAIO instructions to no longer mention ~/swift/trunk.
+
+  * Fixed docstrings in the ring code.
+
+  * PEP8 Updates.
+
+ -- Gregory Holt <gholt@rackspace.com>  Wed, 04 Jan 2012 20:12:13 +0000
+
+swift (1.4.4-4) lucid; urgency=low
+
+  * Fix to packaging to reduce size of repo
+
+ -- John Dickinson <me@not.mn>  Mon, 09 Jan 2012 16:08:49 +0000
+
+swift (1.4.4-3) lucid; urgency=low
+
+    * [Made from http://gitbhub.com/openstack/swift commit f643a58d32b45068ee106444eae90ba0e0d2280c]
+    
+    * Fixes to prevent socket hoarding
+
+ -- dfg <david.goetz@rackspace.com>  Tue, 22 Nov 2011 15:18:37 -0800
+
+swift (1.4.4-2) lucid; urgency=low
+
+    * manpages fix 
+
+ -- dfg <david.goetz@rackspace.com>  Fri, 18 Nov 2011 08:13:16 -0800
+
+swift (1.4.4-1) lucid; urgency=low
+
+    * Adding manpages and fix permissions on auto-created directories.
+
+ -- dfg <david.goetz@rackspace.com>  Thu, 17 Nov 2011 15:17:50 -0800
+
+swift (1.4.4) lucid; urgency=low
+
+    * [Made from http://gitbhub.com/openstack/swift commit cedf65354985337978461465bb821ebbb62439d6]
+
+    * Add sockstat info to recon.
+
+    * Fixed leak from SegmentedIterable.
+
+    * Fixed bufferedhttp to deref socks and fps.
+
+    * Add support for OS Auth API version 2.
+
+    * Make Eventlet's WSGI server log differently.
+
+    * Updated TimeoutError and except Exception refs.
+
+    * Fixed time-sensitive tests.
+
+    * Fixed object manifest etags.
+
+    * Fixes for swift-recon disk usage distribution graph.
+
+    * Adding new manpages for configuration files.
+
+    * Change bzr to swift in getting_started doc.
+
+    * Fixes the HTTPConflict import.
+
+    * Expiring Objects Support.
+
+    * Fixing bug with x-trans-id.
+
+    * Requote the source when doing a COPY.
+
+    * Add documentation for Swift Recon.
+
+    * Make drive audit regexes detect 4-letter drives.
+
+    * Adding what acc/cont/obj into the ratelimit error messages.
+
+    * Query only specific zone via swift-recon.
+
+ -- dfg <david.goetz@rackspace.com>  Wed, 16 Nov 2011 15:17:09 -0800
+
+swift (1.4.3-4) lucid; urgency=low
+
+  * Fix packaging to reduce size of the repo
+
+ -- John Dickinson <me@not.mn>  Mon, 09 Jan 2012 16:01:21 +0000
+
+swift (1.4.3-3) lucid; urgency=low
+
+    * Fix packages. Use correct release.
+
+ -- Florian Hines <florian.hines@gmail.com>  Fri, 14 Oct 2011 19:50:22 +0000
+
+swift (1.4.3-2) lucid; urgency=low
+
+    * Include swift-recon and swift-recon-cron in packages
+
+ -- Florian Hines <florian.hines@gmail.com>  Fri, 14 Oct 2011 16:02:41 +0000
+
+swift (1.4.3-1) lucid; urgency=low
+
+    * [Made from http://gitbhub.com/openstack/swift commit ba57e6ec04d26e83fc83732f63817ebec89a4368]
+
+    * Additional quarantine catching code.
+
+    * Added client_ip to all proxy log lines not otherwise containing it.
+
+    * Content-Type is now application/xml for "GET services/bucket" swift3
+      middleware requests.
+
+    * Alpha release of the Swift Recon Experiment
+
+    * Fix last modified date for swift3 middleware.
+
+    * Fix to clear account/container metadata on account/container deletion.
+
+    * Fix for corner case regarding X-Newest.
+
+    * Fix for object auditor running out of file descriptors.
+
+    * Fix to return all proper headers for manifest objects.
+
+    * Fix to the swift tool to strip any leading slashes on file names when
+      uploading.
+
+ -- John Dickinson <me@not.mn>  Mon, 12 Sep 2011 14:58:30 +0000
+
+swift (1.4.2rax2-1) lucid; urgency=low
+
+  * [Made from lp:swift revno 344]
+
+  * Minor fix for quarantine directory naming.
+
+ -- Gregory Holt <gholt@rackspace.com>  Fri, 12 Aug 2011 19:11:10 +0000
+
+swift (1.4.2rax1-1) lucid; urgency=low
+
+  * [Made from lp:swift revno 339]
+
+  * More quarantine catching code.
+
+  * Swift3 middleware now uses application/xml content type.
+
+ -- Gregory Holt <gholt@rackspace.com>  Wed, 10 Aug 2011 13:03:57 +0000
+
+swift (1.4.2-2) lucid; urgency=low
+
+  * Fixing packaging to reduce the size of the repo
+
+ -- John Dickinson <me@not.mn>  Mon, 09 Jan 2012 18:26:28 +0000
+
+swift (1.4.2-1) lucid; urgency=low
+
+    * Container Synchronization Feature - First Edition
+
+    * Fix swift3 authentication bug about the Date and X-Amz-Date handling.
+
+    * Changing ratelimiting so that it only limits PUTs/DELETEs.
+
+ -- Greg <gholt@rackspace.com>  Thu, 27 Jul 2011 14:36:00 +0000
+
+swift (1.4.1-4) lucid; urgency=low
+
+  * Removed all VCS info from the source to reduce the size of the repo
+
+ -- John Dickinson <me@not.mn>  Fri, 06 Jan 2012 21:34:10 +0000
+
+swift (1.4.1-3) lucid; urgency=low
+
+  * Fixed post-as-copy return code (202 instead of 201)
+
+  * Fixed the infinite charset: utf-8 bug
+
+  * Fixed xml listings to <?xml version="1.1"
+
+ -- Greg <gholt@rackspace.com>  Thu, 14 Jul 2011 14:30:06 +0000
+
+swift (1.4.1-2) lucid; urgency=low
+
+  * Update to comply with XML 1.1: No NULLs in names allowed; control chars are
+    converted to entities (ex: &#x4;)
+
+  * Removed stats/logging code from Swift [now in separate slogging project].
+
+  * This fixes the bug that drop_buffer_cache() doesn't work on systems where
+    off_t isn't 64 bits.
+
+  * You can specify X-Newest: true on GETs and HEADs to indicate you want Swift
+    to query all backend copies and return the newest version retrieved.
+
+  * Object COPY requests now always copy the newest object they can find.
+
+  * Object POSTs are implemented as COPYs now by default (you can revert to
+    previous implementation with conf object_post_as_copy = false)
+
+  * Account and container GETs and HEADs now shuffle the nodes they use to
+    balance load.
+
+ -- Greg <gholt@rackspace.com>  Mon, 11 Jul 2011 17:50:31 +0000
+
+swift (1.4.1-1) lucid; urgency=low
+
+  * st renamed to swift
+
+  * swauth was separated froms swift. It is now its own project and can be
+    found at https://github.com/gholt/swauth.
+
+  * tempauth middleware added as an extremely limited auth system for dev
+    work.
+
+  * Account and container listings now properly labeled UTF-8 (previously the
+    label was "utf8").
+
+  * Accounts are auto-created if an auth token is valid when the
+    account_autocreate proxy config parameter is set to true.
+
+ -- dfg <david.goetz@rackspace.com>  Tue, 14 Jun 2011 12:16:55 -0700
+
+swift (1.4.0-3) lucid; urgency=low
+
+  * removed VCS info from source tarfiles to reduce the size of the repo
+
+ -- John Dickinson <me@not.mn>  Fri, 06 Jan 2012 21:08:55 +0000
+
+swift (1.4.0-2) lucid; urgency=low
+
+  * adding the swift-container-stats-logger into package bin
+
+ -- dfg <dfg@ubuntu.localdomain>  Thu, 26 May 2011 09:48:48 -0700
+
+swift (1.4.0-1) lucid; urgency=low
+
+  * swift-bench now cleans up containers it creates.
+
+  * WSGI servers now load WSGI filters and applications after forking for
+    better plugin support.
+
+  * swauth-cleanup-tokens now handles 404s on token containers and tokens
+    better.
+
+  * Proxy logs the remote IP address as the client IP in the absence of
+    X-Forwarded-For and X-Cluster-Client-IP headers instead of - like it did
+    before.
+
+  * Swift3 WSGI middleware added support for param-signed URLs.
+
+  * swauth- scripts now exit with proper exit codes.
+
+  * Fixed a bug where allowed_headers weren't honored for HEAD requests.
+
+  * Double quarantining of corrupted sqlite3 databases now works.
+
+  * Fix for Object replicator breaking when running object replicator with no
+    objects on the server.
+
+  * Added the Accept-Ranges header to GET and HEAD requests.
+
+  * When a single object has multiple async pending updates on a single
+    device, only latest async pending is now sent.
+
+  * Fixed issue of Swift3 WSGI middleware not working correctly with '/' in
+    object names.
+
+  * Renamed swift-stats-* to swift-dispersion-* to avoid confusion with log
+    stats stuff.
+
+  * Added X-Trans-Id transaction id header to every response.
+
+  * Fixed a Python 2.7 compatibility problem.
+
+  * Now using bracketed notation for ip literals in rsync calls, so
+    compressed ipv6 literals work.
+
+  * Added a container stats collector and refactoring some of the stats code.
+
+  * Changed subdir nodes in XML formatted object listings to align with
+    object nodes. Now: <subdir name="foo"><name>foo</name></subdir> Before:
+    <subdir name="foo" />.
+
+  * Fixed bug in Swauth to support for multiple swauth instances.
+
+  * swift-ring-builder: Added list_parts command which shows common
+    partitions for a given list of devices.
+
+  * Object auditor now shows better statistics updates in the logs.
+
+  * Stats uploaders now allow overrides for source_filename_pattern and
+    new_log_cutoff values.
+
+ -- Greg <gholt@rackspace.com>  Tue, 24 May 2011 22:19:53 +0000
+
+swift (1.0.99+1.1.0rc1-1.155) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 19 May 2011 15:03:03 +0000
+
+swift (1.0.99+1.1.0rc1-1.154) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 18 May 2011 16:02:52 +0000
+
+swift (1.0.99+1.1.0rc1-1.153) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 17 May 2011 22:32:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.152) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 17 May 2011 16:02:04 +0000
+
+swift (1.0.99+1.1.0rc1-1.151) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 16 May 2011 20:16:58 +0000
+
+swift (1.0.99+1.1.0rc1-1.150) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 12 May 2011 21:01:59 +0000
+
+swift (1.0.99+1.1.0rc1-1.149) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 12 May 2011 19:31:57 +0000
+
+swift (1.0.99+1.1.0rc1-1.148) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 07 May 2011 18:48:03 +0000
+
+swift (1.0.99+1.1.0rc1-1.147) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 05 May 2011 21:18:07 +0000
+
+swift (1.0.99+1.1.0rc1-1.146) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 21 Apr 2011 21:02:56 +0000
+
+swift (1.0.99+1.1.0rc1-1.145) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 21 Apr 2011 20:32:59 +0000
+
+swift (1.0.99+1.1.0rc1-1.144) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 21 Apr 2011 00:02:57 +0000
+
+swift (1.0.99+1.1.0rc1-1.143) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 20 Apr 2011 03:47:56 +0000
+
+swift (1.0.99+1.1.0rc1-1.142) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 20 Apr 2011 03:32:56 +0000
+
+swift (1.0.99+1.1.0rc1-1.141) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 18 Apr 2011 18:47:54 +0000
+
+swift (1.0.99+1.1.0rc1-1.140) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 18 Apr 2011 18:33:22 +0000
+
+swift (1.0.99+1.1.0rc1-1.139) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 18 Apr 2011 18:18:01 +0000
+
+swift (1.0.99+1.1.0rc1-1.138) lucid; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 18 Apr 2011 15:22:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.137) lucid; urgency=low
+
+  * Fixing swift-account package to no longer include swift-account-audit.
+
+ -- Greg <gholt@rackspace.com>  Mon, 18 Apr 2011 15:18:09 +0000
+
+swift (1.0.99+1.1.0rc1-1.136) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 17:48:04 +0000
+
+swift (1.0.99+1.1.0rc1-1.135) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 06:17:54 +0000
+
+swift (1.0.99+1.1.0rc1-1.134) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 02:02:52 +0000
+
+swift (1.0.99+1.1.0rc1-1.133) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 01:48:25 +0000
+
+swift (1.0.99+1.1.0rc1-1.132) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 00:32:54 +0000
+
+swift (1.0.99+1.1.0rc1-1.131) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 16 Apr 2011 00:18:31 +0000
+
+swift (1.0.99+1.1.0rc1-1.130) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 15 Apr 2011 15:17:55 +0000
+
+swift (1.0.99+1.1.0rc1-1.129) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 15 Apr 2011 00:48:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.128) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 14 Apr 2011 13:18:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.127) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 12 Apr 2011 00:18:33 +0000
+
+swift (1.0.99+1.1.0rc1-1.126) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 11 Apr 2011 23:18:40 +0000
+
+swift (1.0.99+1.1.0rc1-1.125) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 07 Apr 2011 19:35:57 +0000
+
+swift (1.0.99+1.1.0rc1-1.124) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 01 Apr 2011 22:47:55 +0000
+
+swift (1.0.99+1.1.0rc1-1.123) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 31 Mar 2011 06:17:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.122) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 30 Mar 2011 21:17:25 +0000
+
+swift (1.0.99+1.1.0rc1-1.121) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 30 Mar 2011 20:51:14 +0000
+
+swift (1.0.99+1.1.0rc1-1.120) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 29 Mar 2011 20:32:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.119) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 29 Mar 2011 17:04:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.118) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 26 Mar 2011 00:32:24 +0000
+
+swift (1.0.99+1.1.0rc1-1.117) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 24 Mar 2011 19:47:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.116) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 24 Mar 2011 19:03:13 +0000
+
+swift (1.0.99+1.1.0rc1-1.115) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 24 Mar 2011 17:33:05 +0000
+
+swift (1.0.99+1.1.0rc1-1.114) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 17 Mar 2011 22:47:28 +0000
+
+swift (1.0.99+1.1.0rc1-1.113) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 16 Mar 2011 23:17:29 +0000
+
+swift (1.0.99+1.1.0rc1-1.112) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 16 Mar 2011 19:17:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.111) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 15 Mar 2011 16:46:31 +0000
+
+swift (1.0.99+1.1.0rc1-1.110) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 15 Mar 2011 16:05:49 +0000
+
+swift (1.0.99+1.1.0rc1-1.109) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 15 Mar 2011 15:49:07 +0000
+
+swift (1.0.99+1.1.0rc1-1.108) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 14 Mar 2011 15:32:09 +0000
+
+swift (1.0.99+1.1.0rc1-1.107) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Sat, 12 Mar 2011 02:32:08 +0000
+
+swift (1.0.99+1.1.0rc1-1.106) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 11 Mar 2011 17:02:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.105) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 10 Mar 2011 20:02:13 +0000
+
+swift (1.0.99+1.1.0rc1-1.104) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 08 Mar 2011 23:03:58 +0000
+
+swift (1.0.99+1.1.0rc1-1.103) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 08 Mar 2011 22:02:05 +0000
+
+swift (1.0.99+1.1.0rc1-1.102) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 08 Mar 2011 20:32:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.101) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 03 Mar 2011 22:32:45 +0000
+
+swift (1.0.99+1.1.0rc1-1.100) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 03 Mar 2011 22:17:47 +0000
+
+swift (1.0.99+1.1.0rc1-1.99) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 03 Mar 2011 21:17:11 +0000
+
+swift (1.0.99+1.1.0rc1-1.98) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 03 Mar 2011 15:02:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.97) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 01 Mar 2011 18:32:19 +0000
+
+swift (1.0.99+1.1.0rc1-1.96) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 28 Feb 2011 23:17:22 +0000
+
+swift (1.0.99+1.1.0rc1-1.95) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 24 Feb 2011 21:32:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.94) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 22 Feb 2011 16:17:14 +0000
+
+swift (1.0.99+1.1.0rc1-1.93) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 21 Feb 2011 19:17:18 +0000
+
+swift (1.0.99+1.1.0rc1-1.92) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 17 Feb 2011 22:02:56 +0000
+
+swift (1.0.99+1.1.0rc1-1.91) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 17 Feb 2011 21:02:54 +0000
+
+swift (1.0.99+1.1.0rc1-1.90) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 17 Feb 2011 20:48:47 +0000
+
+swift (1.0.99+1.1.0rc1-1.89) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 17 Feb 2011 16:47:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.88) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 16 Feb 2011 21:17:16 +0000
+
+swift (1.0.99+1.1.0rc1-1.87) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 16 Feb 2011 20:03:55 +0000
+
+swift (1.0.99+1.1.0rc1-1.86) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 14 Feb 2011 19:47:40 +0000
+
+swift (1.0.99+1.1.0rc1-1.85) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 11 Feb 2011 17:32:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.84) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 11 Feb 2011 17:17:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.83) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 10 Feb 2011 22:32:29 +0000
+
+swift (1.0.99+1.1.0rc1-1.82) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 10 Feb 2011 17:17:14 +0000
+
+swift (1.0.99+1.1.0rc1-1.81) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 25 Jan 2011 15:31:57 +0000
+
+swift (1.0.99+1.1.0rc1-1.80) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 25 Jan 2011 15:02:11 +0000
+
+swift (1.0.99+1.1.0rc1-1.79) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 25 Jan 2011 00:31:58 +0000
+
+swift (1.0.99+1.1.0rc1-1.78) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 24 Jan 2011 23:47:12 +0000
+
+swift (1.0.99+1.1.0rc1-1.77) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 24 Jan 2011 23:32:25 +0000
+
+swift (1.0.99+1.1.0rc1-1.76) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 24 Jan 2011 23:02:07 +0000
+
+swift (1.0.99+1.1.0rc1-1.75) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 21 Jan 2011 21:02:18 +0000
+
+swift (1.0.99+1.1.0rc1-1.74) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 21 Jan 2011 16:32:34 +0000
+
+swift (1.0.99+1.1.0rc1-1.73) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 20 Jan 2011 00:46:52 +0000
+
+swift (1.0.99+1.1.0rc1-1.72) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 20 Jan 2011 00:32:10 +0000
+
+swift (1.0.99+1.1.0rc1-1.71) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 19 Jan 2011 23:32:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.70) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 19 Jan 2011 15:32:06 +0000
+
+swift (1.0.99+1.1.0rc1-1.69) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 19 Jan 2011 05:02:09 +0000
+
+swift (1.0.99+1.1.0rc1-1.68) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 19 Jan 2011 04:16:52 +0000
+
+swift (1.0.99+1.1.0rc1-1.67) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 18 Jan 2011 21:47:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.66) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 18 Jan 2011 20:46:55 +0000
+
+swift (1.0.99+1.1.0rc1-1.65) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 18 Jan 2011 19:16:58 +0000
+
+swift (1.0.99+1.1.0rc1-1.64) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 18 Jan 2011 15:31:57 +0000
+
+swift (1.0.99+1.1.0rc1-1.63) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 17 Jan 2011 23:16:53 +0000
+
+swift (1.0.99+1.1.0rc1-1.62) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 17 Jan 2011 22:32:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.61) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 21:02:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.60) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 20:47:03 +0000
+
+swift (1.0.99+1.1.0rc1-1.59) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 18:17:01 +0000
+
+swift (1.0.99+1.1.0rc1-1.58) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 14:47:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.57) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 09:17:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.56) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 08:47:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.55) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 05:32:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.54) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 05:16:59 +0000
+
+swift (1.0.99+1.1.0rc1-1.53) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 14 Jan 2011 04:01:59 +0000
+
+swift (1.0.99+1.1.0rc1-1.52) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 13 Jan 2011 21:17:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.51) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 13 Jan 2011 17:32:00 +0000
+
+swift (1.0.99+1.1.0rc1-1.50) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 13 Jan 2011 02:47:02 +0000
+
+swift (1.0.99+1.1.0rc1-1.49) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 12 Jan 2011 01:46:59 +0000
+
+swift (1.0.99+1.1.0rc1-1.48) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 11 Jan 2011 17:17:06 +0000
+
+swift (1.0.99+1.1.0rc1-1.47) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 11 Jan 2011 15:47:04 +0000
+
+swift (1.0.99+1.1.0rc1-1.46) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 11 Jan 2011 04:02:33 +0000
+
+swift (1.0.99+1.1.0rc1-1.45) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 11 Jan 2011 03:47:39 +0000
+
+swift (1.0.99+1.1.0rc1-1.44) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 10 Jan 2011 17:06:33 +0000
+
+swift (1.0.99+1.1.0rc1-1.43) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 28 Dec 2010 21:02:30 +0000
+
+swift (1.0.99+1.1.0rc1-1.42) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 28 Dec 2010 19:17:29 +0000
+
+swift (1.0.99+1.1.0rc1-1.41) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 28 Dec 2010 12:43:58 +0000
+
+swift (1.0.99+1.1.0rc1-1.40) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 10 Dec 2010 17:32:34 +0000
+
+swift (1.0.99+1.1.0rc1-1.39) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 06 Dec 2010 20:17:37 +0000
+
+swift (1.0.99+1.1.0rc1-1.38) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 03 Dec 2010 16:17:35 +0000
+
+swift (1.0.99+1.1.0rc1-1.37) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 01 Dec 2010 20:32:49 +0000
+
+swift (1.0.99+1.1.0rc1-1.36) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 01 Dec 2010 16:32:32 +0000
+
+swift (1.0.99+1.1.0rc1-1.35) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 30 Nov 2010 23:47:35 +0000
+
+swift (1.0.99+1.1.0rc1-1.34) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 30 Nov 2010 21:04:50 +0000
+
+swift (1.0.99+1.1.0rc1-1.33) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 30 Nov 2010 16:03:16 +0000
+
+swift (1.0.99+1.1.0rc1-1.32) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 24 Nov 2010 18:17:28 +0000
+
+swift (1.0.99+1.1.0rc1-1.31) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 24 Nov 2010 17:47:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.30) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 24 Nov 2010 17:32:33 +0000
+
+swift (1.0.99+1.1.0rc1-1.29) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 19 Nov 2010 23:02:30 +0000
+
+swift (1.0.99+1.1.0rc1-1.28) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 18 Nov 2010 23:03:04 +0000
+
+swift (1.0.99+1.1.0rc1-1.27) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 18 Nov 2010 21:48:07 +0000
+
+swift (1.0.99+1.1.0rc1-1.26) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 16 Nov 2010 23:32:16 +0000
+
+swift (1.0.99+1.1.0rc1-1.25) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 16 Nov 2010 20:02:18 +0000
+
+swift (1.0.99+1.1.0rc1-1.24) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 16 Nov 2010 19:17:22 +0000
+
+swift (1.0.99+1.1.0rc1-1.23) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 15 Nov 2010 23:17:13 +0000
+
+swift (1.0.99+1.1.0rc1-1.22) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 15 Nov 2010 19:47:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.21) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 11 Nov 2010 16:02:15 +0000
+
+swift (1.0.99+1.1.0rc1-1.20) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 05 Nov 2010 20:02:23 +0000
+
+swift (1.0.99+1.1.0rc1-1.19) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 05 Nov 2010 18:17:12 +0000
+
+swift (1.0.99+1.1.0rc1-1.18) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 05 Nov 2010 18:02:45 +0000
+
+swift (1.0.99+1.1.0rc1-1.17) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Fri, 05 Nov 2010 16:02:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.16) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 04 Nov 2010 19:05:15 +0000
+
+swift (1.0.99+1.1.0rc1-1.15) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 04 Nov 2010 15:17:24 +0000
+
+swift (1.0.99+1.1.0rc1-1.14) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 03 Nov 2010 18:47:24 +0000
+
+swift (1.0.99+1.1.0rc1-1.13) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 03 Nov 2010 16:32:37 +0000
+
+swift (1.0.99+1.1.0rc1-1.12) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 02 Nov 2010 18:47:24 +0000
+
+swift (1.0.99+1.1.0rc1-1.11) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 02 Nov 2010 18:32:50 +0000
+
+swift (1.0.99+1.1.0rc1-1.10) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 02 Nov 2010 14:32:21 +0000
+
+swift (1.0.99+1.1.0rc1-1.9) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 01 Nov 2010 21:17:24 +0000
+
+swift (1.0.99+1.1.0rc1-1.8) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 28 Oct 2010 20:32:14 +0000
+
+swift (1.0.99+1.1.0rc1-1.7) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 25 Oct 2010 20:48:07 +0000
+
+swift (1.0.99+1.1.0rc1-1.6) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Mon, 25 Oct 2010 19:02:19 +0000
+
+swift (1.0.99+1.1.0rc1-1.5) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 21 Oct 2010 19:17:17 +0000
+
+swift (1.0.99+1.1.0rc1-1.4) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Thu, 21 Oct 2010 15:32:18 +0000
+
+swift (1.0.99+1.1.0rc1-1.3) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 20 Oct 2010 22:32:27 +0000
+
+swift (1.0.99+1.1.0rc1-1.2) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Wed, 20 Oct 2010 20:47:42 +0000
+
+swift (1.0.99+1.1.0rc1-1.1) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Merged from trunk
+
+ -- OpenStack Hudson <hudson@openstack.org>  Tue, 19 Oct 2010 23:02:56 +0000
+
+swift (1.0.99+1.1.0rc1-1) unstable; urgency=low
+
+  * New upstream release.
+  * Updated to standards version 3.9.1. 
+  * Use jquery package to provide jquery.js.
+  * Updated some of the control file to make lintian happy.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 19 Oct 2010 14:32:17 -0700
+
+swift (1.0.2-7) unstable; urgency=low
+
+  * Added swift-bench to swift package.
+
+ -- Monty Taylor <mordred@inaugust.com>  Mon, 18 Oct 2010 09:14:22 -0700
+
+swift (1.0.2-6) unstable; urgency=low
+
+  * swift-auth-create-account is now swift-auth-add-user.
+
+ -- Greg Holt <gholt@rackspace.com>  Fri, 03 Sep 2010 13:32:20 +0000
+
+swift (1.0.2-5) unstable; urgency=low
+
+  * Add a step in debian/rules to create doc/build if it doesn't exist.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 25 Aug 2010 08:55:45 -0700
+
+swift (1.0.2-4) unstable; urgency=low
+
+  * Fixed the depend on sphinx - it actually only needs to be >= 1.0.
+  * Added paste-deploy as a depend.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 24 Aug 2010 12:02:31 -0700
+
+swift (1.0.2-3) unstable; urgency=low
+
+  [ Greg Holt ]
+  * Added a png to the docs.
+
+  [ Monty Taylor ]
+  * Add rsync and remove duplicate net-tools dependency.
+  * Added Jay Payne to uploaders.
+  * Added Greg Holt to uploaders.
+  * Updated VCS location to use UDD locations. 
+  * We actually depend on 1.0 of sphinx.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 24 Aug 2010 00:02:00 -0700
+
+swift (1.0.2-2) unstable; urgency=low
+
+  * Created python-swift package and actually put the python files in it.
+  * Added python build dep.
+  * Added debhelper token to postinst script. Also removed the
+    byte-compiling of the files, since python-support should do that for us.
+  * Cleaned up control file - removed homepage entries in description,
+    removed trailing periods.
+  * Changed provides in swift-proxy to match policy.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 28 Jul 2010 13:32:55 -0700
+
+swift (1.0.2-1) unstable; urgency=low
+
+  * New upstream release.
+  * Added VCS info to control file.
+
+ -- Monty Taylor <mordred@inaugust.com>  Thu, 22 Jul 2010 18:32:02 -0500
+
+swift (1.0.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Monty Taylor <mordred@inaugust.com>  Mon, 19 Jul 2010 11:22:41 -0500
+
+swift (1.0.0-1) unstable; urgency=low
+
+  [ Michael Barton ]
+  * Initial release
+
+  [ Monty Taylor ]
+  * Added docs to doc system.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 14 Jul 2010 10:41:11 -0500
