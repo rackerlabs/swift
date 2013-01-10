@@ -1,3 +1,17 @@
+swift (1.7.6~rax6) lucid; urgency=low
+
+  * You can now give swift-init a -k N (or --kill-wait N) option to override
+    the default 15 second wait for a process to die after sending it the die
+    signal. This is useful for boxes that are awfully slow for whatever reason.
+
+  * swift-get-nodes now supports a single arg path.
+    For example:
+        swift-get-nodes ring.gz a/c/o
+    In place of:
+        swift-get-nodes ring.gz a c o
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 10 Jan 2013 20:22:00 +0000
+
 swift (1.7.6~rax5) lucid; urgency=low
 
   * Backport of https://review.openstack.org/#/c/17237/
