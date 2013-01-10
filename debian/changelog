@@ -1,3 +1,9 @@
+swift (1.7.6~rax7) lucid; urgency=low
+
+  * Fixing requirements of netifaces to 0.5 instead of 0.6
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 10 Jan 2013 20:53:00 +0000
+
 swift (1.7.6~rax6) lucid; urgency=low
 
   * You can now give swift-init a -k N (or --kill-wait N) option to override
