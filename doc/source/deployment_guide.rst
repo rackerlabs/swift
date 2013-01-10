@@ -230,11 +230,13 @@ mount_check          true        Whether or not check if the devices are
                                  to the root device
 bind_ip              0.0.0.0     IP Address for server to bind to
 bind_port            6000        Port for server to bind to
+bind_timeout         30          Seconds to attempt bind before giving up
 workers              1           Number of workers to fork
 disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
+eventlet_debug       false       If true, turn on debug logging for eventlet
 ===================  ==========  =============================================
 
 [object-server]
@@ -338,12 +340,14 @@ mount_check          true        Whether or not check if the devices are
                                  to the root device
 bind_ip              0.0.0.0     IP Address for server to bind to
 bind_port            6001        Port for server to bind to
+bind_timeout         30          Seconds to attempt bind before giving up
 workers              1           Number of workers to fork
 user                 swift       User to run as
 disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
+eventlet_debug       false       If true, turn on debug logging for eventlet
 ===================  ==========  ============================================
 
 [container-server]
@@ -436,6 +440,7 @@ mount_check          true        Whether or not check if the devices are
                                  to the root device
 bind_ip              0.0.0.0     IP Address for server to bind to
 bind_port            6002        Port for server to bind to
+bind_timeout         30          Seconds to attempt bind before giving up
 workers              1           Number of workers to fork
 user                 swift       User to run as
 db_preallocation     off         If you don't mind the extra disk space usage in
@@ -446,6 +451,7 @@ disable_fallocate    false       Disable "fast fail" fallocate checks if the
                                  underlying filesystem does not support it.
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
+eventlet_debug       false       If true, turn on debug logging for eventlet
 ===================  ==========  =============================================
 
 [account-server]
@@ -526,6 +532,8 @@ Option                        Default          Description
 bind_ip                       0.0.0.0          IP Address for server to
                                                bind to
 bind_port                     80               Port for server to bind to
+bind_timeout                  30               Seconds to attempt bind before
+                                               giving up
 swift_dir                     /etc/swift       Swift configuration directory
 workers                       1                Number of workers to fork
 user                          swift            User to run as
@@ -545,6 +553,8 @@ cors_allow_origin                              This is a list of hosts that
 log_custom_handlers           None             Comma separated list of functions
                                                to call to setup custom log
                                                handlers.
+eventlet_debug                false            If true, turn on debug logging
+                                               for eventlet
 ============================  ===============  =============================
 
 [proxy-server]
@@ -653,6 +663,15 @@ auth_prefix            /auth/                          The HTTP request path
                                                        letter `v`.
 token_life             86400                           The number of seconds a
                                                        token is valid.
+storage_url_scheme     default                         Scheme to return with
+                                                       storage urls: http,
+                                                       https, or default
+                                                       (chooses based on what
+                                                       the server is running
+                                                       as) This can be useful
+                                                       with an SSL load
+                                                       balancer in front of a
+                                                       non-SSL server.
 =====================  =============================== =======================
 
 Additionally, you need to list all the accounts/users you want here. The format
@@ -677,12 +696,14 @@ that have been explicitly allowed for them by a .admin or .reseller_admin.
 The trailing optional storage_url allows you to specify an alternate url to
 hand back to the user upon authentication. If not specified, this defaults to::
 
-    http[s]://<ip>:<port>/v1/<reseller_prefix>_<account>
+    $HOST/v1/<reseller_prefix>_<account>
 
-Where http or https depends on whether cert_file is specified in the [DEFAULT]
-section, <ip> and <port> are based on the [DEFAULT] section's bind_ip and
-bind_port (falling back to 127.0.0.1 and 8080), <reseller_prefix> is from this
-section, and <account> is from the user_<account>_<user> name.
+Where $HOST will do its best to resolve to what the requester would need to use
+to reach this host, <reseller_prefix> is from this section, and <account> is
+from the user_<account>_<user> name. Note that $HOST cannot possibly handle
+when you have a load balancer in front of it that does https while TempAuth
+itself runs with http; in such a case, you'll have to specify the
+storage_url_scheme configuration value as an override.
 
 Here are example entries, required for running the tests::
 

@@ -42,47 +42,8 @@ from urllib import quote, unquote
 
 from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
-                                get_valid_utf8_str, config_true_value)
-
-
-class InputProxy(object):
-    """
-    File-like object that counts bytes read.
-    To be swapped in for wsgi.input for accounting purposes.
-    """
-    def __init__(self, wsgi_input):
-        """
-        :param wsgi_input: file-like object to wrap the functionality of
-        """
-        self.wsgi_input = wsgi_input
-        self.bytes_received = 0
-        self.client_disconnect = False
-
-    def read(self, *args, **kwargs):
-        """
-        Pass read request to the underlying file-like object and
-        add bytes read to total.
-        """
-        try:
-            chunk = self.wsgi_input.read(*args, **kwargs)
-        except Exception:
-            self.client_disconnect = True
-            raise
-        self.bytes_received += len(chunk)
-        return chunk
-
-    def readline(self, *args, **kwargs):
-        """
-        Pass readline request to the underlying file-like object and
-        add bytes read to total.
-        """
-        try:
-            line = self.wsgi_input.readline(*args, **kwargs)
-        except Exception:
-            self.client_disconnect = True
-            raise
-        self.bytes_received += len(line)
-        return line
+                                get_valid_utf8_str, config_true_value,
+                                InputProxy)
 
 
 class ProxyLoggingMiddleware(object):
@@ -205,10 +166,6 @@ class ProxyLoggingMiddleware(object):
                 elif isinstance(iterable, list):
                     start_response_args[0][1].append(
                         ('content-length', str(sum(len(i) for i in iterable))))
-                else:
-                    raise Exception('WSGI [proxy-logging]: No content-length '
-                                    'or transfer-encoding header sent and '
-                                    'there is content! %r' % chunk)
             start_response(*start_response_args[0])
             bytes_sent = 0
             client_disconnect = False

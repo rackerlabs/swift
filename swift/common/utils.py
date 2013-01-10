@@ -624,11 +624,17 @@ class SwiftLogFormatter(logging.Formatter):
     """
 
     def format(self, record):
+        if not hasattr(record, 'server'):
+            # Catch log messages that were not initiated by swift
+            # (for example, the keystone auth middleware)
+            record.server = record.name
         msg = logging.Formatter.format(self, record)
-        if (record.txn_id and record.levelno != logging.INFO and
+        if (hasattr(record, 'txn_id') and record.txn_id and
+                record.levelno != logging.INFO and
                 record.txn_id not in msg):
             msg = "%s (txn: %s)" % (msg, record.txn_id)
-        if (record.client_ip and record.levelno != logging.INFO and
+        if (hasattr(record, 'client_ip') and record.client_ip and
+                record.levelno != logging.INFO and
                 record.client_ip not in msg):
             msg = "%s (client_ip: %s)" % (msg, record.client_ip)
         return msg
@@ -690,7 +696,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
             handler = SysLogHandler(address=log_address, facility=facility)
         except socket.error, e:
             # Either /dev/log isn't a UNIX socket or it does not exist at all
-            if e.errno not in [errno.ENOTSOCK,  errno.ENOENT]:
+            if e.errno not in [errno.ENOTSOCK, errno.ENOENT]:
                 raise e
             handler = SysLogHandler(facility=facility)
     handler.setFormatter(formatter)
@@ -745,6 +751,31 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
     return adapted_logger
 
 
+def get_hub():
+    """
+    Checks whether poll is available and falls back
+    on select if it isn't.
+
+    Note about epoll:
+
+    Review: https://review.openstack.org/#/c/18806/
+
+    There was a problem where once out of every 30 quadrillion
+    connections, a coroutine wouldn't wake up when the client
+    closed its end. Epoll was not reporting the event or it was
+    getting swallowed somewhere. Then when that file descriptor
+    was re-used, eventlet would freak right out because it still
+    thought it was waiting for activity from it in some other coro.
+    """
+    try:
+        import select
+        if hasattr(select, "poll"):
+            return "poll"
+        return "selects"
+    except ImportError:
+        return None
+
+
 def drop_privileges(user):
     """
     Sets the userid/groupid of the current process, get session leader, etc.
@@ -756,6 +787,7 @@ def drop_privileges(user):
         os.setgroups([])
     os.setgid(user[3])
     os.setuid(user[2])
+    os.environ['HOME'] = user[5]
     try:
         os.setsid()
     except OSError:
@@ -1518,3 +1550,43 @@ def reiterate(iterable):
             return itertools.chain([chunk], iterable)
         except StopIteration:
             return []
+
+
+class InputProxy(object):
+    """
+    File-like object that counts bytes read.
+    To be swapped in for wsgi.input for accounting purposes.
+    """
+    def __init__(self, wsgi_input):
+        """
+        :param wsgi_input: file-like object to wrap the functionality of
+        """
+        self.wsgi_input = wsgi_input
+        self.bytes_received = 0
+        self.client_disconnect = False
+
+    def read(self, *args, **kwargs):
+        """
+        Pass read request to the underlying file-like object and
+        add bytes read to total.
+        """
+        try:
+            chunk = self.wsgi_input.read(*args, **kwargs)
+        except Exception:
+            self.client_disconnect = True
+            raise
+        self.bytes_received += len(chunk)
+        return chunk
+
+    def readline(self, *args, **kwargs):
+        """
+        Pass readline request to the underlying file-like object and
+        add bytes read to total.
+        """
+        try:
+            line = self.wsgi_input.readline(*args, **kwargs)
+        except Exception:
+            self.client_disconnect = True
+            raise
+        self.bytes_received += len(line)
+        return line

@@ -24,6 +24,7 @@ from itertools import chain
 from StringIO import StringIO
 
 import eventlet
+import eventlet.debug
 from eventlet import greenio, GreenPool, sleep, wsgi, listen
 from paste.deploy import loadapp, appconfig
 from eventlet.green import socket, ssl
@@ -32,7 +33,7 @@ from urllib import unquote
 from swift.common.swob import Request
 from swift.common.utils import capture_stdio, disable_fallocate, \
     drop_privileges, get_logger, NullLogger, config_true_value, \
-    validate_configuration
+    validate_configuration, get_hub
 
 
 def monkey_patch_mimetools():
@@ -70,7 +71,8 @@ def get_socket(conf, default_port=8080):
         bind_addr[0], bind_addr[1], socket.AF_UNSPEC, socket.SOCK_STREAM)
         if addr[0] in (socket.AF_INET, socket.AF_INET6)][0]
     sock = None
-    retry_until = time.time() + 30
+    bind_timeout = int(conf.get('bind_timeout', 30))
+    retry_until = time.time() + bind_timeout
     warn_ssl = False
     while not sock and time.time() < retry_until:
         try:
@@ -85,8 +87,9 @@ def get_socket(conf, default_port=8080):
                 raise
             sleep(0.1)
     if not sock:
-        raise Exception('Could not bind to %s:%s after trying for 30 seconds' %
-                        bind_addr)
+        raise Exception(_('Could not bind to %s:%s '
+                          'after trying for %s seconds') % (
+                              bind_addr[0], bind_addr[1], bind_timeout))
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # in my experience, sockets can hang around forever without keepalive
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -132,8 +135,11 @@ def run_wsgi(conf_file, app_section, *args, **kwargs):
         wsgi.HttpProtocol.log_message = \
             lambda s, f, *a: logger.error('ERROR WSGI: ' + f % a)
         wsgi.WRITE_TIMEOUT = int(conf.get('client_timeout') or 60)
-        eventlet.hubs.use_hub('poll')
+
+        eventlet.hubs.use_hub(get_hub())
         eventlet.patcher.monkey_patch(all=False, socket=True)
+        eventlet_debug = config_true_value(conf.get('eventlet_debug', 'no'))
+        eventlet.debug.hub_exceptions(eventlet_debug)
         app = loadapp('config:%s' % conf_file,
                       global_conf={'log_name': log_name})
         pool = GreenPool(size=1024)
@@ -207,7 +213,7 @@ def init_request_processor(conf_file, app_section, *args, **kwargs):
 
     :param conf_file: Path to paste.deploy style configuration file
     :param app_section: App name from conf file to load config from
-    :returns the loaded application entry point
+    :returns: the loaded application entry point
     :raises ConfigFileError: Exception is raised for config file error
     """
     try:
@@ -244,10 +250,6 @@ class WSGIContext(object):
     """
     def __init__(self, wsgi_app):
         self.app = wsgi_app
-        # Results from the last call to self._start_response.
-        self._response_status = None
-        self._response_headers = None
-        self._response_exc_info = None
 
     def _start_response(self, status, headers, exc_info=None):
         """
@@ -262,7 +264,14 @@ class WSGIContext(object):
         """
         Ensures start_response has been called before returning.
         """
-        resp = iter(self.app(env, self._start_response))
+        self._response_status = None
+        self._response_headers = None
+        self._response_exc_info = None
+        resp = self.app(env, self._start_response)
+        # if start_response has been called, just return the iter
+        if self._response_status is not None:
+            return resp
+        resp = iter(resp)
         try:
             first_chunk = resp.next()
         except StopIteration:

@@ -21,6 +21,7 @@ environments and response values into objects that are more friendly to
 interact with.
 """
 
+from collections import defaultdict
 from cStringIO import StringIO
 import UserDict
 import time
@@ -87,7 +88,7 @@ RESPONSE_REASONS = {
     504: ('Gateway Timeout', 'A timeout has occurred speaking to a '
           'backend server.'),
     507: ('Insufficient Storage', 'There was not enough space to save the '
-          'resource.'),
+          'resource. Drive: %(drive)s'),
 }
 
 
@@ -586,38 +587,49 @@ class Accept(object):
 
     :param headerval: value of the header as a str
     """
+    token = r'[^()<>@,;:\"/\[\]?={}\x00-\x20\x7f]+'  # RFC 2616 2.2
+    acc_pattern = re.compile(r'^\s*(' + token + r')/(' + token +
+                             r')(;\s*q=([\d.]+))?\s*$')
+
     def __init__(self, headerval):
         self.headerval = headerval
 
     def _get_types(self):
-        headerval = self.headerval or '*/*'
-        level = 1
         types = []
-        for typ in headerval.split(','):
-            quality = 1.0
-            if '; q=' in typ:
-                typ, quality = typ.split('; q=')
-            elif ';q=' in typ:
-                typ, quality = typ.split(';q=')
-            quality = float(quality)
-            if typ.startswith('*/'):
-                quality -= 0.01
-            elif typ.endswith('/*'):
-                quality -= 0.01
-            elif '*' in typ:
-                raise AssertionError('bad accept header')
-            pattern = '[a-zA-Z0-9-]+'.join([re.escape(x) for x in
-                                            typ.strip().split('*')])
-            types.append((quality, re.compile(pattern), typ))
-        types.sort(reverse=True, key=lambda t: t[0])
-        return types
+        if not self.headerval:
+            return []
+        for typ in self.headerval.split(','):
+            type_parms = self.acc_pattern.findall(typ)
+            if not type_parms:
+                raise ValueError('Invalid accept header')
+            typ, subtype, parms, quality = type_parms[0]
+            quality = float(quality or '1.0')
+            pattern = '^' + \
+                (self.token if typ == '*' else re.escape(typ)) + '/' + \
+                (self.token if subtype == '*' else re.escape(subtype)) + '$'
+            types.append((pattern, quality, '*' not in (typ, subtype)))
+        # sort candidates by quality, then whether or not there were globs
+        types.sort(reverse=True, key=lambda t: (t[1], t[2]))
+        return [t[0] for t in types]
 
-    def best_match(self, options, default_match='text/plain'):
-        for quality, pattern, typ in self._get_types():
+    def best_match(self, options):
+        """
+        Returns the item from "options" that best matches the accept header.
+        Returns None if no available options are acceptable to the client.
+
+        :param options: a list of content-types the server can respond with
+        """
+        try:
+            types = self._get_types()
+        except ValueError:
+            return None
+        if not types and options:
+            return options[0]
+        for pattern in types:
             for option in options:
-                if pattern.match(option):
+                if re.match(pattern, option):
                     return option
-        return default_match
+        return None
 
     def __repr__(self):
         return self.headerval
@@ -758,10 +770,12 @@ class Request(object):
         the path segment.
         """
         path_info = self.path_info
+        if not path_info or path_info[0] != '/':
+            return None
         try:
             slash_loc = path_info.index('/', 1)
         except ValueError:
-            return None
+            slash_loc = len(path_info)
         self.script_name += path_info[:slash_loc]
         self.path_info = path_info[slash_loc:]
         return path_info[1:slash_loc]
@@ -951,16 +965,17 @@ class Response(object):
             title, exp = RESPONSE_REASONS[self.status_int]
             if exp:
                 body = '<html><h1>%s</h1><p>%s</p></html>' % (title, exp)
+                if '%(' in body:
+                    body = body % defaultdict(lambda: 'unknown', self.__dict__)
                 self.content_length = len(body)
                 return [body]
         return ['']
 
-    def absolute_location(self):
+    def host_url(self):
         """
-        Attempt to construct an absolute location.
+        Returns the best guess that can be made for an absolute location up to
+        the path, for example: https://host.com:1234
         """
-        if not self.location.startswith('/'):
-            return self.location
         if 'HTTP_HOST' in self.environ:
             host = self.environ['HTTP_HOST']
         else:
@@ -971,7 +986,15 @@ class Response(object):
             host, port = host.rsplit(':', 1)
         elif scheme == 'https' and host.endswith(':443'):
             host, port = host.rsplit(':', 1)
-        return '%s://%s%s' % (scheme, host, self.location)
+        return '%s://%s' % (scheme, host)
+
+    def absolute_location(self):
+        """
+        Attempt to construct an absolute location.
+        """
+        if not self.location.startswith('/'):
+            return self.location
+        return self.host_url() + self.location
 
     def __call__(self, env, start_response):
         self.environ = env
@@ -1002,6 +1025,7 @@ HTTPUnauthorized = status_map[401]
 HTTPForbidden = status_map[403]
 HTTPMethodNotAllowed = status_map[405]
 HTTPNotFound = status_map[404]
+HTTPNotAcceptable = status_map[406]
 HTTPRequestTimeout = status_map[408]
 HTTPConflict = status_map[409]
 HTTPLengthRequired = status_map[411]

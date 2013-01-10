@@ -232,11 +232,12 @@ class TestMatch(unittest.TestCase):
 class TestAccept(unittest.TestCase):
     def test_accept_json(self):
         for accept in ('application/json', 'application/json;q=1.0,*/*;q=0.9',
-                       '*/*;q=0.9,application/json;q=1.0', 'application/*'):
+                       '*/*;q=0.9,application/json;q=1.0', 'application/*',
+                       'text/*,application/json', 'application/*,text/*',
+                       'application/json,text/xml'):
             acc = swift.common.swob.Accept(accept)
             match = acc.best_match(['text/plain', 'application/json',
-                                    'application/xml', 'text/xml'],
-                                   default_match='text/plain')
+                                    'application/xml', 'text/xml'])
             self.assertEquals(match, 'application/json')
 
     def test_accept_plain(self):
@@ -245,8 +246,7 @@ class TestAccept(unittest.TestCase):
                        'text/plain,application/xml'):
             acc = swift.common.swob.Accept(accept)
             match = acc.best_match(['text/plain', 'application/json',
-                                    'application/xml', 'text/xml'],
-                                   default_match='text/plain')
+                                    'application/xml', 'text/xml'])
             self.assertEquals(match, 'text/plain')
 
     def test_accept_xml(self):
@@ -254,8 +254,17 @@ class TestAccept(unittest.TestCase):
                        '*/*;q=0.9,application/xml;q=1.0'):
             acc = swift.common.swob.Accept(accept)
             match = acc.best_match(['text/plain', 'application/xml',
-                                   'text/xml'], default_match='text/plain')
+                                   'text/xml'])
             self.assertEquals(match, 'application/xml')
+
+    def test_accept_invalid(self):
+        for accept in ('*', 'text/plain,,', 'some stuff',
+                       'application/xml;q=1.0;q=1.1', 'text/plain,*',
+                       'text /plain', 'text\x7f/plain'):
+            acc = swift.common.swob.Accept(accept)
+            match = acc.best_match(['text/plain', 'application/xml',
+                                   'text/xml'])
+            self.assertEquals(match, None)
 
 
 class TestRequest(unittest.TestCase):
@@ -306,6 +315,18 @@ class TestRequest(unittest.TestCase):
     def test_bad_path_info_pop(self):
         req = swift.common.swob.Request.blank('blahblah')
         self.assertEquals(req.path_info_pop(), None)
+
+    def test_path_info_pop_last(self):
+        req = swift.common.swob.Request.blank('/last')
+        self.assertEquals(req.path_info_pop(), 'last')
+        self.assertEquals(req.path_info, '')
+        self.assertEquals(req.script_name, '/last')
+
+    def test_path_info_pop_none(self):
+        req = swift.common.swob.Request.blank('/')
+        self.assertEquals(req.path_info_pop(), '')
+        self.assertEquals(req.path_info, '')
+        self.assertEquals(req.script_name, '/')
 
     def test_copy_get(self):
         req = swift.common.swob.Request.blank(
@@ -687,6 +708,83 @@ class TestResponse(unittest.TestCase):
         self.assert_('etag' in resp.headers)
         resp.etag = None
         self.assert_('etag' not in resp.headers)
+
+    def test_host_url_default(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'http'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '1234'
+        del env['HTTP_HOST']
+        self.assertEquals(resp.host_url(), 'http://bob:1234')
+
+    def test_host_url_default_port_squelched(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'http'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '80'
+        del env['HTTP_HOST']
+        self.assertEquals(resp.host_url(), 'http://bob')
+
+    def test_host_url_https(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'https'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '1234'
+        del env['HTTP_HOST']
+        self.assertEquals(resp.host_url(), 'https://bob:1234')
+
+    def test_host_url_https_port_squelched(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'https'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '443'
+        del env['HTTP_HOST']
+        self.assertEquals(resp.host_url(), 'https://bob')
+
+    def test_host_url_host_override(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'http'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '1234'
+        env['HTTP_HOST'] = 'someother'
+        self.assertEquals(resp.host_url(), 'http://someother')
+
+    def test_host_url_host_port_override(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'http'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '1234'
+        env['HTTP_HOST'] = 'someother:5678'
+        self.assertEquals(resp.host_url(), 'http://someother:5678')
+
+    def test_host_url_host_https(self):
+        resp = self._get_response()
+        env = resp.environ
+        env['wsgi.url_scheme'] = 'https'
+        env['SERVER_NAME'] = 'bob'
+        env['SERVER_PORT'] = '1234'
+        env['HTTP_HOST'] = 'someother:5678'
+        self.assertEquals(resp.host_url(), 'https://someother:5678')
+
+    def test_507(self):
+        resp = swift.common.swob.HTTPInsufficientStorage()
+        content = ''.join(resp._response_iter(resp.app_iter, resp._body))
+        self.assertEquals(
+            content,
+            '<html><h1>Insufficient Storage</h1><p>There was not enough space '
+            'to save the resource. Drive: unknown</p></html>')
+        resp = swift.common.swob.HTTPInsufficientStorage(drive='sda1')
+        content = ''.join(resp._response_iter(resp.app_iter, resp._body))
+        self.assertEquals(
+            content,
+            '<html><h1>Insufficient Storage</h1><p>There was not enough space '
+            'to save the resource. Drive: sda1</p></html>')
 
 
 class TestUTC(unittest.TestCase):
