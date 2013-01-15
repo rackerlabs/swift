@@ -1,3 +1,12 @@
+swift (1.7.6~rax8) lucid; urgency=low
+
+  * NULLs no longer allowed in names.
+
+  * swift-recon -r will now report oldest and most recent completed
+    passes -- helps in finding replicators that are misbehaving.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 15 Jan 2013 20:34:00 +0000
+
 swift (1.7.6~rax7) lucid; urgency=low
 
   * Fixing requirements of netifaces to 0.5 instead of 0.6
