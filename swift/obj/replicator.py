@@ -564,7 +564,10 @@ class ObjectReplicator(Daemon):
                 continue
             unlink_older_than(tmp_path, time.time() - self.reclaim_age)
             if not os.path.exists(obj_path):
-                mkdirs(obj_path)
+                try:
+                    mkdirs(obj_path)
+                except Exception, err:
+                    self.logger.exception('ERROR creating %s' % obj_path)
                 continue
             for partition in os.listdir(obj_path):
                 try:
@@ -647,7 +650,8 @@ class ObjectReplicator(Daemon):
         self.logger.info(
             _("Object replication complete (once). (%.02f minutes)"), total)
         if not (override_partitions or override_devices):
-            dump_recon_cache({'object_replication_time': total},
+            dump_recon_cache({'object_replication_time': total,
+                              'object_replication_last': time.time()},
                              self.rcache, self.logger)
 
     def run_forever(self, *args, **kwargs):
@@ -661,7 +665,8 @@ class ObjectReplicator(Daemon):
             total = (time.time() - start) / 60
             self.logger.info(
                 _("Object replication complete. (%.02f minutes)"), total)
-            dump_recon_cache({'object_replication_time': total},
+            dump_recon_cache({'object_replication_time': total,
+                              'object_replication_last': time.time()},
                              self.rcache, self.logger)
             self.logger.debug(_('Replication sleeping for %s seconds.'),
                               self.run_pause)
