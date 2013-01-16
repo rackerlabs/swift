@@ -1,3 +1,10 @@
+swift (1.7.6~rax9) lucid; urgency=low
+
+  * Internal swob refactors to help with sos and other middleware
+    integration.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 16 Jan 2013 20:37:00 +0000
+
 swift (1.7.6~rax8) lucid; urgency=low
 
   * NULLs no longer allowed in names.
