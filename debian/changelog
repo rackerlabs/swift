@@ -1,3 +1,142 @@
+swift (1.7.7~rax1) lucid; urgency=low
+
+  * e064ba1 Updated get_more_nodes algorithm
+
+  * 5d73da1 Static Large Object Support
+
+  * c4c66d8 TempURL filename options; bug fixes
+
+  * b715eb5 Remove reduant check of list.
+
+  * 8bc065e make swift fsync
+
+  * 5d2b70b Updating classifiers status to stable and clean up
+
+  * 7e3adf5 Adding a quick note to helper functions so its clear what they do
+    and they don't get misused.
+
+  * 86220ba Force log entries to be one line
+
+  * 89ab090 Account Server: Refactor HEAD request handler
+
+  * 9a3e0f4 Move the swift.1 manpage to python-swiftclient
+
+  * c52a992 Add debug level logs for TempAuth.authorize.
+
+  * a4a047c Fix descriptions in sample configs.
+
+  * d9130d7 Correct docstring for swift.common.ring.utils.build_tier_tree and
+    add unit test for it.
+
+  * 13eabdc Improve bin/swift-account-audit
+
+  * 7548cb9 Make rings' replica counts adjustable.
+
+  * e69f3be Add cache=swift.cache for authtoken example.
+
+  * a7e31eb Add tests on keystone for invalid path requests.
+
+  * 0f284e0 Allow acl with a valid token.
+
+  * 0937086 Adding speed limit options for DB auditor
+
+  * ffada71 Fixed formpost QUERY_STRING bugs.
+
+  * 6991734 timing-based affinity sorting for primary replicas
+
+  * 93ea7c6 Documentation fixups
+
+  * b622993 Account and container info fixes and improvement.
+
+  * e88ff34 Cleanup of file permissions
+
+  * bce8443 Adds first-byte latency timings for GET requests.
+
+  * 3b341e3 fix large objects with unicode
+
+  * 2267b03 Swift MemcacheRing (set) interface is incompatible fixes
+
+  * f4a09eb log message in exception level when path encoding errors happen.
+
+  * 45f0502 Fix spelling mistakes
+
+  * 902b66d Change in swift-drive-audit handling log rotation.
+
+  * 7242843 Replaces Copyright statements for LLC with Foundation, removes
+    date.
+
+  * 1b86380 Add generated keystone documentation to misc.rst.
+
+  * a622349 Use a doubled proxy-logging instead of each middleware handling it
+    differently (if at all)
+
+  * 83d8922 minor development doc changes
+
+  * 9d8da02 changing from quilt to native
+
+  * 0640a61 Fixed some swift-recon typos
+
+  * 08c0174 Change the flag set to specify bulk delete and expand archives from
+    a HTTP header to a query parameter.
+
+  * 24ef120 Basic container quotas
+
+  * 07d85d3 Made internal client handle failed requests better
+
+  * ec084de Optimize the ring builder's _reassign_parts() method.
+
+  * c3d4a63 Fixes 'not in' operator usage
+
+  * 156cdc8 Deterministic, repeatable serialization for rings.
+
+  * abe70e8 Cleanup based on pyflakes.
+
+  * 8552953 Remove tempauth allowed_sync_hosts conf option
+
+  * a1395ec Allow change the endpoint_type when use swift-dispersion tools
+
+  * e189723 Allow rebalance to take a seed.
+
+  * 87a42ab Added fallocate_reserve option
+
+  * f28914c Handle access_log_headers in proxy_logging
+
+  * 00dbad0 Add optional locking to swift-ring-builder
+
+  * c45e435 Add wsgify and split_path utilities to swob
+
+  * 2f663ff Bulk Requests: auto extract archive and bulk delete middleware.
+
+  * 0dc32d3 Fix keystoneauth with OPTIONS headers (eg: CORS)
+
+  * c7cf74f Deprecate is_admin feature.
+
+  * 89ee10b Add handler for CORS "actual requests"
+
+  * f2941b0 Validate numericness of ports in builder files.
+
+  * 68479cc Add more command-line options to swift-bench.
+
+  * 04037ae Fixed bug in domain_remap and cname_lookup middleware
+
+  * ee98288 Update auto-generated docs
+
+  * 161aa89 prevent irregular auth_prefix config in tempauth
+
+  * 035e49c Fix superfluous GET requests in swift-bench.
+
+  * 3282e38 Add --run-dir switch to swift-init
+
+  * 8801b74 Make statsd sample rate behave better.
+
+  * 633d1aa version bump to 1.7.7-dev
+
+  * d87ce03 authors and changelog update for swift 1.7.6
+
+  * 6ff644b Allow for multiple X-(Account|Container)-* headers.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 05 Mar 2013 17:40:00 +0000
+
 swift (1.7.6~rax9) lucid; urgency=low
 
   * Internal swob refactors to help with sos and other middleware
