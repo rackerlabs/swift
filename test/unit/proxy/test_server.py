@@ -28,10 +28,11 @@ from cStringIO import StringIO
 from gzip import GzipFile
 from httplib import HTTPException
 from shutil import rmtree
-from time import time
+import time
 from urllib import unquote, quote
 from hashlib import md5
 from tempfile import mkdtemp
+import random
 
 import eventlet
 from eventlet import sleep, spawn, Timeout, util, wsgi, listen
@@ -52,7 +53,7 @@ from swift.common.utils import mkdirs, normalize_timestamp, NullLogger
 from swift.common.wsgi import monkey_patch_mimetools
 from swift.proxy.controllers.obj import SegmentedIterable
 from swift.proxy.controllers.base import get_container_memcache_key, \
-    get_account_memcache_key
+    get_account_memcache_key, cors_validation
 import swift.proxy.controllers
 from swift.common.swob import Request, Response, HTTPNotFound, \
     HTTPUnauthorized
@@ -150,7 +151,7 @@ def setup():
     _test_coros = \
         (prospa, acc1spa, acc2spa, con1spa, con2spa, obj1spa, obj2spa)
     # Create account
-    ts = normalize_timestamp(time())
+    ts = normalize_timestamp(time.time())
     partition, nodes = prosrv.account_ring.get_nodes('a')
     for node in nodes:
         conn = swift.proxy.controllers.obj.http_connect(node['ip'],
@@ -182,6 +183,17 @@ def teardown():
     Request.__init__ = Request._orig_init
     if Request._orig_del:
         Request.__del__ = Request._orig_del
+
+
+def sortHeaderNames(headerNames):
+    """
+    Return the given string of header names sorted.
+
+    headerName: a comma-delimited list of header names
+    """
+    headers = [a.strip() for a in headerNames.split(',') if a.strip()]
+    headers.sort()
+    return ', '.join(headers)
 
 
 def fake_http_connect(*code_iter, **kwargs):
@@ -304,27 +316,36 @@ def fake_http_connect(*code_iter, **kwargs):
 
 class FakeRing(object):
 
-    def __init__(self):
+    def __init__(self, replicas=3):
         # 9 total nodes (6 more past the initial 3) is the cap, no matter if
-        # this is set higher.
+        # this is set higher, or R^2 for R replicas
+        self.replicas = replicas
         self.max_more_nodes = 0
+        self.devs = {}
+
+    def set_replicas(self, replicas):
+        self.replicas = replicas
         self.devs = {}
 
     def get_nodes(self, account, container=None, obj=None):
         devs = []
-        for x in xrange(3):
+        for x in xrange(self.replicas):
             devs.append(self.devs.get(x))
             if devs[x] is None:
                 self.devs[x] = devs[x] = \
-                    {'ip': '10.0.0.%s' % x, 'port': 1000 + x, 'device': 'sda'}
+                    {'ip': '10.0.0.%s' % x,
+                     'port': 1000 + x,
+                     'device': 'sd' + (chr(ord('a') + x)),
+                     'id': x}
         return 1, devs
 
     def get_part_nodes(self, part):
         return self.get_nodes('blah')[1]
 
     def get_more_nodes(self, nodes):
-        # 9 is the true cap
-        for x in xrange(3, min(3 + self.max_more_nodes, 9)):
+        # replicas^2 is the true cap
+        for x in xrange(self.replicas, min(self.replicas + self.max_more_nodes,
+                                           self.replicas * self.replicas)):
             yield {'ip': '10.0.0.%s' % x, 'port': 1000 + x, 'device': 'sda'}
 
 
@@ -339,11 +360,11 @@ class FakeMemcache(object):
     def keys(self):
         return self.store.keys()
 
-    def set(self, key, value, timeout=0):
+    def set(self, key, value, time=0):
         self.store[key] = value
         return True
 
-    def incr(self, key, timeout=0):
+    def incr(self, key, time=0):
         self.store[key] = self.store.setdefault(key, 0) + 1
         return self.store[key]
 
@@ -371,11 +392,12 @@ class FakeMemcacheReturnsNone(FakeMemcache):
 def save_globals():
     orig_http_connect = getattr(swift.proxy.controllers.base, 'http_connect',
                                 None)
-    orig_account_info = getattr(proxy_server.Controller, 'account_info', None)
+    orig_account_info = getattr(swift.proxy.controllers.Controller,
+                                'account_info', None)
     try:
         yield True
     finally:
-        proxy_server.Controller.account_info = orig_account_info
+        swift.proxy.controllers.Controller.account_info = orig_account_info
         swift.proxy.controllers.base.http_connect = orig_http_connect
         swift.proxy.controllers.obj.http_connect = orig_http_connect
         swift.proxy.controllers.account.http_connect = orig_http_connect
@@ -390,15 +412,6 @@ def set_http_connect(*args, **kwargs):
     swift.proxy.controllers.container.http_connect = new_connect
 
 
-def set_shuffle():
-    shuffle = lambda l: None
-    proxy_server.shuffle = shuffle
-    swift.proxy.controllers.base.shuffle = shuffle
-    swift.proxy.controllers.obj.shuffle = shuffle
-    swift.proxy.controllers.account.shuffle = shuffle
-    swift.proxy.controllers.container.shuffle = shuffle
-
-
 # tests
 class TestController(unittest.TestCase):
 
@@ -411,7 +424,7 @@ class TestController(unittest.TestCase):
                                        account_ring=self.account_ring,
                                        container_ring=self.container_ring,
                                        object_ring=FakeRing())
-        self.controller = proxy_server.Controller(app)
+        self.controller = swift.proxy.controllers.Controller(app)
 
         self.account = 'some_account'
         self.container = 'some_container'
@@ -446,7 +459,12 @@ class TestController(unittest.TestCase):
             self.assertEquals(count, 12345)
 
             cache_key = get_account_memcache_key(self.account)
-            self.assertEquals({'status': 200, 'container_count': 12345},
+            container_info = {'status': 200,
+                              'container_count': 12345,
+                              'total_object_count': None,
+                              'bytes': None,
+                              'meta': {}}
+            self.assertEquals(container_info,
                               self.memcache.get(cache_key))
 
             set_http_connect()
@@ -465,7 +483,12 @@ class TestController(unittest.TestCase):
             self.assertEquals(count, None)
 
             cache_key = get_account_memcache_key(self.account)
-            self.assertEquals({'status': 404, 'container_count': 0},
+            container_info = {'status': 404,
+                              'container_count': 0,
+                              'total_object_count': None,
+                              'bytes': None,
+                              'meta': {}}
+            self.assertEquals(container_info,
                               self.memcache.get(cache_key))
 
             set_http_connect()
@@ -561,7 +584,7 @@ class TestController(unittest.TestCase):
             return None, None
 
         with save_globals():
-            proxy_server.Controller.account_info = account_info
+            swift.proxy.controllers.Controller.account_info = account_info
             ret = self.controller.container_info(self.account,
                                                  self.container)
             self.check_container_info_return(ret, True)
@@ -574,7 +597,7 @@ class TestController(unittest.TestCase):
         with save_globals():
             headers = {'x-container-read': self.read_acl,
                        'x-container-write': self.write_acl}
-            proxy_server.Controller.account_info = account_info
+            swift.proxy.controllers.Controller.account_info = account_info
             set_http_connect(200, headers=headers)
             ret = self.controller.container_info(self.account,
                                                  self.container)
@@ -597,7 +620,7 @@ class TestController(unittest.TestCase):
             return True, True, 0
 
         with save_globals():
-            proxy_server.Controller.account_info = account_info
+            swift.proxy.controllers.Controller.account_info = account_info
             set_http_connect(404, 404, 404)
             ret = self.controller.container_info(self.account,
                                                  self.container)
@@ -733,6 +756,41 @@ class TestProxyServer(unittest.TestCase):
         finally:
             rmtree(swift_dir, ignore_errors=True)
 
+    def test_node_timing(self):
+        baseapp = proxy_server.Application({'sorting_method': 'timing'},
+                                           FakeMemcache(),
+                                           container_ring=FakeRing(),
+                                           object_ring=FakeRing(),
+                                           account_ring=FakeRing())
+        self.assertEquals(baseapp.node_timings, {})
+
+        req = Request.blank('/v1/account', environ={'REQUEST_METHOD': 'HEAD'})
+        baseapp.update_request(req)
+        resp = baseapp.handle_request(req)
+        self.assertEquals(resp.status_int, 503)  # couldn't connect to anything
+        exp_timings = {}
+        self.assertEquals(baseapp.node_timings, exp_timings)
+
+        proxy_server.time = lambda: times.pop(0)
+        try:
+            times = [time.time()]
+            exp_timings = {'127.0.0.1': (0.1,
+                                         times[0] + baseapp.timing_expiry)}
+            baseapp.set_node_timing({'ip': '127.0.0.1'}, 0.1)
+            self.assertEquals(baseapp.node_timings, exp_timings)
+        finally:
+            proxy_server.time = time.time
+
+        proxy_server.shuffle = lambda l: l
+        try:
+            nodes = [{'ip': '127.0.0.1'}, {'ip': '127.0.0.2'}, {'ip': '127.0.0.3'}]
+            res = baseapp.sort_nodes(nodes)
+            exp_sorting = [{'ip': '127.0.0.2'}, {'ip': '127.0.0.3'},
+                           {'ip': '127.0.0.1'}]
+            self.assertEquals(res, exp_sorting)
+        finally:
+            proxy_server.shuffle = random.shuffle
+
 
 class TestObjectController(unittest.TestCase):
 
@@ -742,6 +800,11 @@ class TestObjectController(unittest.TestCase):
                                             container_ring=FakeRing(),
                                             object_ring=FakeRing())
         monkey_patch_mimetools()
+
+    def tearDown(self):
+        self.app.account_ring.set_replicas(3)
+        self.app.container_ring.set_replicas(3)
+        self.app.object_ring.set_replicas(3)
 
     def assert_status_map(self, method, statuses, expected, raise_exc=False):
         with save_globals():
@@ -938,7 +1001,7 @@ class TestObjectController(unittest.TestCase):
         listing3 = [{"hash": "6605f80e3cefaa24e9823544df4edbd6",
                      "last_modified": "2012-11-08T04:05:37.853710",
                      "bytes": 2,
-                     "name": "seg05",
+                     "name": u'\N{SNOWMAN}seg05',
                      "content_type": "application/octet-stream"}]
 
         response_bodies = (
@@ -1004,9 +1067,10 @@ class TestObjectController(unittest.TestCase):
                      ['GET', '/a/segments/seg04', {}],
                      ['GET', '/a/segments',
                       {'format': 'json', 'prefix': 'seg', 'marker': 'seg04'}],
-                     ['GET', '/a/segments/seg05', {}],
+                     ['GET', '/a/segments/\xe2\x98\x83seg05', {}],
                      ['GET', '/a/segments',
-                      {'format': 'json', 'prefix': 'seg', 'marker': 'seg05'}]])
+                      {'format': 'json', 'prefix': 'seg',
+                       'marker': '\xe2\x98\x83seg05'}]])
 
             finally:
                 # other tests in this file get very unhappy if this
@@ -1437,7 +1501,7 @@ class TestObjectController(unittest.TestCase):
             limit = MAX_META_OVERALL_SIZE
             controller = proxy_server.ObjectController(self.app, 'account',
                                                        'container', 'object')
-            count = limit / 256  # enough to cause the limit to be reched
+            count = limit / 256  # enough to cause the limit to be reached
             headers = dict(
                 (('X-Object-Meta-' + str(i), 'a' * 256)
                     for i in xrange(count + 1)))
@@ -1723,9 +1787,9 @@ class TestObjectController(unittest.TestCase):
 
     def test_error_limiting(self):
         with save_globals():
-            set_shuffle()
             controller = proxy_server.ObjectController(self.app, 'account',
                                                        'container', 'object')
+            controller.app.sort_nodes = lambda l: l
             self.assert_status_map(controller.HEAD, (200, 200, 503, 200, 200),
                                    200)
             self.assertEquals(controller.app.object_ring.devs[0]['errors'], 2)
@@ -1807,7 +1871,7 @@ class TestObjectController(unittest.TestCase):
 
             for dev in self.app.account_ring.devs.values():
                 dev['errors'] = self.app.error_suppression_limit + 1
-                dev['last_error'] = time()
+                dev['last_error'] = time.time()
             set_http_connect(200)
             #                acct [isn't actually called since everything
             #                      is error limited]
@@ -1818,7 +1882,7 @@ class TestObjectController(unittest.TestCase):
                 dev['errors'] = 0
             for dev in self.app.container_ring.devs.values():
                 dev['errors'] = self.app.error_suppression_limit + 1
-                dev['last_error'] = time()
+                dev['last_error'] = time.time()
             set_http_connect(200, 200)
             #                acct cont [isn't actually called since
             #                           everything is error limited]
@@ -3399,10 +3463,10 @@ class TestObjectController(unittest.TestCase):
                                                        'container', 'object')
             set_http_connect(200, 200, 200, 200, 200, 202, 202, 202)
             self.app.memcache.store = {}
-            orig_time = proxy_server.time.time
+            orig_time = time.time
             try:
-                t = time()
-                proxy_server.time.time = lambda: t
+                t = time.time()
+                time.time = lambda: t
                 req = Request.blank('/a/c/o', {},
                                     headers={'Content-Type': 'foo/bar',
                                              'X-Delete-After': '60'})
@@ -3427,7 +3491,7 @@ class TestObjectController(unittest.TestCase):
                 self.assertEquals(req.headers.get('x-delete-at'),
                                   str(int(t + 60)))
             finally:
-                proxy_server.time.time = orig_time
+                time.time = orig_time
 
     def test_POST_non_int_delete_after(self):
         with save_globals():
@@ -3471,7 +3535,7 @@ class TestObjectController(unittest.TestCase):
             controller.make_requests = fake_make_requests
             set_http_connect(200, 200)
             self.app.memcache.store = {}
-            t = str(int(time() + 100))
+            t = str(int(time.time() + 100))
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Type': 'foo/bar',
                                          'X-Delete-At': t})
@@ -3482,7 +3546,7 @@ class TestObjectController(unittest.TestCase):
             self.assertTrue('X-Delete-At-Device' in given_headers)
             self.assertTrue('X-Delete-At-Partition' in given_headers)
 
-            t = str(int(time() + 100)) + '.1'
+            t = str(int(time.time() + 100)) + '.1'
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Type': 'foo/bar',
                                          'X-Delete-At': t})
@@ -3491,7 +3555,7 @@ class TestObjectController(unittest.TestCase):
             self.assertEquals(resp.status_int, 400)
             self.assertTrue('Non-integer X-Delete-At' in resp.body)
 
-            t = str(int(time() - 100))
+            t = str(int(time.time() - 100))
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Type': 'foo/bar',
                                          'X-Delete-At': t})
@@ -3506,10 +3570,10 @@ class TestObjectController(unittest.TestCase):
                                                        'container', 'object')
             set_http_connect(200, 200, 201, 201, 201)
             self.app.memcache.store = {}
-            orig_time = proxy_server.time.time
+            orig_time = time.time
             try:
-                t = time()
-                proxy_server.time.time = lambda: t
+                t = time.time()
+                time.time = lambda: t
                 req = Request.blank('/a/c/o', {},
                                     headers={'Content-Length': '0',
                                              'Content-Type': 'foo/bar',
@@ -3520,7 +3584,7 @@ class TestObjectController(unittest.TestCase):
                 self.assertEquals(req.headers.get('x-delete-at'),
                                   str(int(t + 60)))
             finally:
-                proxy_server.time.time = orig_time
+                time.time = orig_time
 
     def test_PUT_non_int_delete_after(self):
         with save_globals():
@@ -3565,7 +3629,7 @@ class TestObjectController(unittest.TestCase):
             controller._connect_put_node = fake_connect_put_node
             set_http_connect(200, 200)
             self.app.memcache.store = {}
-            t = str(int(time() + 100))
+            t = str(int(time.time() + 100))
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Length': '0',
                                          'Content-Type': 'foo/bar',
@@ -3577,7 +3641,7 @@ class TestObjectController(unittest.TestCase):
             self.assertTrue('X-Delete-At-Device' in given_headers)
             self.assertTrue('X-Delete-At-Partition' in given_headers)
 
-            t = str(int(time() + 100)) + '.1'
+            t = str(int(time.time() + 100)) + '.1'
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Length': '0',
                                          'Content-Type': 'foo/bar',
@@ -3587,7 +3651,7 @@ class TestObjectController(unittest.TestCase):
             self.assertEquals(resp.status_int, 400)
             self.assertTrue('Non-integer X-Delete-At' in resp.body)
 
-            t = str(int(time() - 100))
+            t = str(int(time.time() - 100))
             req = Request.blank('/a/c/o', {},
                                 headers={'Content-Length': '0',
                                          'Content-Type': 'foo/bar',
@@ -3690,8 +3754,8 @@ class TestObjectController(unittest.TestCase):
                 7)
             self.assertEquals('999', resp.headers['access-control-max-age'])
             self.assertEquals(
-                'x-foo',
-                resp.headers['access-control-allow-headers'])
+                'x-auth-token, x-foo',
+                sortHeaderNames(resp.headers['access-control-allow-headers']))
             req = Request.blank(
                 '/a/c/o.jpg',
                 {'REQUEST_METHOD': 'OPTIONS'},
@@ -3750,8 +3814,254 @@ class TestObjectController(unittest.TestCase):
                 7)
             self.assertEquals('999', resp.headers['access-control-max-age'])
             self.assertEquals(
-                'x-foo',
-                resp.headers['access-control-allow-headers'])
+                'x-auth-token, x-foo',
+                sortHeaderNames(resp.headers['access-control-allow-headers']))
+
+    def test_CORS_invalid_origin(self):
+        with save_globals():
+            controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+
+            def stubContainerInfo(*args):
+                return {
+                    'cors': {
+                        'allow_origin': 'http://baz'
+                    }
+                }
+            controller.container_info = stubContainerInfo
+
+            def objectGET(controller, req):
+                return Response()
+
+            req = Request.blank(
+                '/a/c/o.jpg',
+                {'REQUEST_METHOD': 'GET'},
+                headers={'Origin': 'http://foo.bar'})
+
+            resp = cors_validation(objectGET)(controller, req)
+
+            self.assertEquals(401, resp.status_int)
+
+    def test_CORS_valid(self):
+        with save_globals():
+            controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+
+            def stubContainerInfo(*args):
+                return {
+                    'cors': {
+                        'allow_origin': 'http://foo.bar'
+                    }
+                }
+            controller.container_info = stubContainerInfo
+
+            def objectGET(controller, req):
+                return Response(headers={
+                    'X-Object-Meta-Color': 'red',
+                    'X-Super-Secret': 'hush',
+                })
+
+            req = Request.blank(
+                '/a/c/o.jpg',
+                {'REQUEST_METHOD': 'GET'},
+                headers={'Origin': 'http://foo.bar'})
+
+            resp = cors_validation(objectGET)(controller, req)
+
+            self.assertEquals(200, resp.status_int)
+            self.assertEquals('http://foo.bar',
+                              resp.headers['access-control-allow-origin'])
+            self.assertEquals('red', resp.headers['x-object-meta-color'])
+            # X-Super-Secret is in the response, but not "exposed"
+            self.assertEquals('hush', resp.headers['x-super-secret'])
+            self.assertTrue('access-control-expose-headers' in resp.headers)
+            exposed = set(
+                h.strip() for h in
+                resp.headers['access-control-expose-headers'].split(','))
+            expected_exposed = set(['cache-control', 'content-language',
+                                    'content-type', 'expires', 'last-modified',
+                                    'pragma', 'etag', 'x-timestamp',
+                                    'x-trans-id', 'x-object-meta-color'])
+            self.assertEquals(expected_exposed, exposed)
+
+    def _gather_x_container_headers(self, controller_call, req, *connect_args,
+                                    **kwargs):
+        header_list = kwargs.pop('header_list', ['X-Container-Partition',
+                                                 'X-Container-Host',
+                                                 'X-Container-Device'])
+        seen_headers = []
+        def capture_headers(ipaddr, port, device, partition, method,
+                            path, headers=None, query_string=None):
+            captured = {}
+            for header in header_list:
+                captured[header] = headers.get(header)
+            seen_headers.append(captured)
+
+        with save_globals():
+            self.app.allow_account_management = True
+
+            set_http_connect(*connect_args, give_connect=capture_headers,
+                             **kwargs)
+            resp = controller_call(req)
+            self.assertEqual(2, resp.status_int // 100) # sanity check
+
+            # don't care about the account/container HEADs, so chuck
+            # the first two requests
+            return sorted(seen_headers[2:],
+                          key=lambda d: d.get(header_list[0]) or 'Z')
+
+    def test_PUT_x_container_headers_with_equal_replicas(self):
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'Content-Length': '5'}, body='12345')
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.PUT, req,
+            200, 200, 201, 201, 201)   # HEAD HEAD PUT PUT PUT
+        self.assertEqual(seen_headers, [
+                {'X-Container-Host': '10.0.0.0:1000',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sda'},
+                {'X-Container-Host': '10.0.0.1:1001',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdb'},
+                {'X-Container-Host': '10.0.0.2:1002',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdc'}])
+
+    def test_PUT_x_container_headers_with_fewer_container_replicas(self):
+        self.app.container_ring.set_replicas(2)
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'Content-Length': '5'}, body='12345')
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.PUT, req,
+            200, 200, 201, 201, 201)   # HEAD HEAD PUT PUT PUT
+
+        self.assertEqual(seen_headers, [
+                {'X-Container-Host': '10.0.0.0:1000',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sda'},
+                {'X-Container-Host': '10.0.0.1:1001',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdb'},
+                {'X-Container-Host': None,
+                 'X-Container-Partition': None,
+                 'X-Container-Device': None}])
+
+    def test_PUT_x_container_headers_with_more_container_replicas(self):
+        self.app.container_ring.set_replicas(4)
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'Content-Length': '5'}, body='12345')
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.PUT, req,
+            200, 200, 201, 201, 201)   # HEAD HEAD PUT PUT PUT
+
+        self.assertEqual(seen_headers, [
+                {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sda,sdd'},
+                {'X-Container-Host': '10.0.0.1:1001',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdb'},
+                {'X-Container-Host': '10.0.0.2:1002',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdc'}])
+
+    def test_POST_x_container_headers_with_more_container_replicas(self):
+        self.app.container_ring.set_replicas(4)
+        self.app.object_post_as_copy = False
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'POST'},
+                            headers={'Content-Type': 'application/stuff'})
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.POST, req,
+            200, 200, 200, 200, 200)   # HEAD HEAD POST POST POST
+
+        self.assertEqual(seen_headers, [
+                {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sda,sdd'},
+                {'X-Container-Host': '10.0.0.1:1001',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdb'},
+                {'X-Container-Host': '10.0.0.2:1002',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdc'}])
+
+    def test_DELETE_x_container_headers_with_more_container_replicas(self):
+        self.app.container_ring.set_replicas(4)
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'DELETE'},
+                            headers={'Content-Type': 'application/stuff'})
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.DELETE, req,
+            200, 200, 200, 200, 200)   # HEAD HEAD DELETE DELETE DELETE
+
+        self.assertEqual(seen_headers, [
+                {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sda,sdd'},
+                {'X-Container-Host': '10.0.0.1:1001',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdb'},
+                {'X-Container-Host': '10.0.0.2:1002',
+                 'X-Container-Partition': 1,
+                 'X-Container-Device': 'sdc'}])
+
+    def test_PUT_x_delete_at_with_fewer_container_replicas(self):
+        self.app.container_ring.set_replicas(2)
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'Content-Type': 'application/stuff',
+                                     'Content-Length': '0',
+                                     'X-Delete-At': int(time.time()) + 100000})
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.PUT, req,
+            200, 200, 201, 201, 201,   # HEAD HEAD PUT PUT PUT
+            header_list=('X-Delete-At-Host', 'X-Delete-At-Device',
+                         'X-Delete-At-Partition'))
+
+        self.assertEqual(seen_headers, [
+                {'X-Delete-At-Host': '10.0.0.0:1000',
+                 'X-Delete-At-Partition': 1,
+                 'X-Delete-At-Device': 'sda'},
+                {'X-Delete-At-Host': '10.0.0.1:1001',
+                 'X-Delete-At-Partition': 1,
+                 'X-Delete-At-Device': 'sdb'},
+                {'X-Delete-At-Host': None,
+                 'X-Delete-At-Partition': None,
+                 'X-Delete-At-Device': None}])
+
+
+    def test_PUT_x_delete_at_with_more_container_replicas(self):
+        self.app.container_ring.set_replicas(4)
+        self.app.expiring_objects_account = 'expires'
+        self.app.expiring_objects_container_divisor = 60
+
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'Content-Type': 'application/stuff',
+                                     'Content-Length': 0,
+                                     'X-Delete-At': int(time.time()) + 100000})
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        seen_headers = self._gather_x_container_headers(
+            controller.PUT, req,
+            200, 200, 201, 201, 201,   # HEAD HEAD PUT PUT PUT
+            header_list=('X-Delete-At-Host', 'X-Delete-At-Device',
+                         'X-Delete-At-Partition'))
+        self.assertEqual(seen_headers, [
+                {'X-Delete-At-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Delete-At-Partition': 1,
+                 'X-Delete-At-Device': 'sda,sdd'},
+                {'X-Delete-At-Host': '10.0.0.1:1001',
+                 'X-Delete-At-Partition': 1,
+                 'X-Delete-At-Device': 'sdb'},
+                {'X-Delete-At-Host': '10.0.0.2:1002',
+                 'X-Delete-At-Partition': 1,
+                 'X-Delete-At-Device': 'sdc'}])
 
 
 class TestContainerController(unittest.TestCase):
@@ -3909,7 +4219,7 @@ class TestContainerController(unittest.TestCase):
 
                 for dev in self.app.account_ring.devs.values():
                     dev['errors'] = self.app.error_suppression_limit + 1
-                    dev['last_error'] = time()
+                    dev['last_error'] = time.time()
                 set_http_connect(200, 200, 200, 200, 200, 200)
                 resp = getattr(controller, meth)(req)
                 self.assertEquals(resp.status_int, 404)
@@ -3942,9 +4252,9 @@ class TestContainerController(unittest.TestCase):
 
     def test_error_limiting(self):
         with save_globals():
-            set_shuffle()
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
+            controller.app.sort_nodes = lambda l: l
             self.assert_status_map(controller.HEAD, (200, 503, 200, 200), 200,
                                    missing_container=False)
             self.assertEquals(
@@ -4296,8 +4606,8 @@ class TestContainerController(unittest.TestCase):
                 6)
             self.assertEquals('999', resp.headers['access-control-max-age'])
             self.assertEquals(
-                'x-foo',
-                resp.headers['access-control-allow-headers'])
+                'x-auth-token, x-foo',
+                sortHeaderNames(resp.headers['access-control-allow-headers']))
             req = Request.blank(
                 '/a/c',
                 {'REQUEST_METHOD': 'OPTIONS'},
@@ -4357,8 +4667,175 @@ class TestContainerController(unittest.TestCase):
                 6)
             self.assertEquals('999', resp.headers['access-control-max-age'])
             self.assertEquals(
-                'x-foo',
-                resp.headers['access-control-allow-headers'])
+                'x-auth-token, x-foo',
+                sortHeaderNames(resp.headers['access-control-allow-headers']))
+
+    def test_CORS_invalid_origin(self):
+        with save_globals():
+            controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+            def stubContainerInfo(*args):
+                return {
+                    'cors': {
+                        'allow_origin': 'http://baz'
+                    }
+                }
+            controller.container_info = stubContainerInfo
+
+            def containerGET(controller, req):
+                return Response()
+
+            req = Request.blank(
+                '/a/c/o.jpg',
+                {'REQUEST_METHOD': 'GET'},
+                headers={'Origin': 'http://foo.bar'})
+
+            resp = cors_validation(containerGET)(controller, req)
+
+            self.assertEquals(401, resp.status_int)
+
+    def test_CORS_valid(self):
+        with save_globals():
+            controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+            def stubContainerInfo(*args):
+                return {
+                    'cors': {
+                        'allow_origin': 'http://foo.bar'
+                    }
+                }
+            controller.container_info = stubContainerInfo
+
+            def containerGET(controller, req):
+                return Response(headers={
+                    'X-Container-Meta-Color': 'red',
+                    'X-Super-Secret': 'hush',
+                })
+
+            req = Request.blank(
+                '/a/c',
+                {'REQUEST_METHOD': 'GET'},
+                headers={'Origin': 'http://foo.bar'})
+
+            resp = cors_validation(containerGET)(controller, req)
+
+            self.assertEquals(200, resp.status_int)
+            self.assertEquals('http://foo.bar',
+                              resp.headers['access-control-allow-origin'])
+            self.assertEquals('red', resp.headers['x-container-meta-color'])
+            # X-Super-Secret is in the response, but not "exposed"
+            self.assertEquals('hush', resp.headers['x-super-secret'])
+            self.assertTrue('access-control-expose-headers' in resp.headers)
+            exposed = set(
+                h.strip() for h in
+                resp.headers['access-control-expose-headers'].split(','))
+            expected_exposed = set(['cache-control', 'content-language',
+                                    'content-type', 'expires', 'last-modified',
+                                    'pragma', 'etag', 'x-timestamp',
+                                    'x-trans-id', 'x-container-meta-color'])
+            self.assertEquals(expected_exposed, exposed)
+
+    def _gather_x_account_headers(self, controller_call, req, *connect_args,
+                                    **kwargs):
+        seen_headers = []
+        to_capture = ('X-Account-Partition', 'X-Account-Host',
+                      'X-Account-Device')
+
+        def capture_headers(ipaddr, port, device, partition, method,
+                            path, headers=None, query_string=None):
+            captured = {}
+            for header in to_capture:
+                captured[header] = headers.get(header)
+            seen_headers.append(captured)
+
+        with save_globals():
+            self.app.allow_account_management = True
+
+            set_http_connect(*connect_args, give_connect=capture_headers,
+                             **kwargs)
+            resp = controller_call(req)
+            self.assertEqual(2, resp.status_int // 100) # sanity check
+
+            # don't care about the account HEAD, so throw away the
+            # first element
+            return sorted(seen_headers[1:],
+                          key=lambda d: d['X-Account-Host'] or 'Z')
+
+    def test_PUT_x_account_headers_with_fewer_account_replicas(self):
+        self.app.account_ring.set_replicas(2)
+        req = Request.blank('/a/c', headers={'': ''})
+        controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+        seen_headers = self._gather_x_account_headers(
+            controller.PUT, req,
+            200, 201, 201, 201)    # HEAD PUT PUT PUT
+        self.assertEqual(seen_headers, [
+                {'X-Account-Host': '10.0.0.0:1000',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sda'},
+                {'X-Account-Host': '10.0.0.1:1001',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdb'},
+                {'X-Account-Host': None,
+                 'X-Account-Partition': None,
+                 'X-Account-Device': None}])
+
+    def test_PUT_x_account_headers_with_more_account_replicas(self):
+        self.app.account_ring.set_replicas(4)
+        req = Request.blank('/a/c', headers={'': ''})
+        controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+        seen_headers = self._gather_x_account_headers(
+            controller.PUT, req,
+            200, 201, 201, 201)    # HEAD PUT PUT PUT
+        self.assertEqual(seen_headers, [
+                {'X-Account-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sda,sdd'},
+                {'X-Account-Host': '10.0.0.1:1001',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdb'},
+                {'X-Account-Host': '10.0.0.2:1002',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdc'}])
+
+    def test_DELETE_x_account_headers_with_fewer_account_replicas(self):
+        self.app.account_ring.set_replicas(2)
+        req = Request.blank('/a/c', headers={'': ''})
+        controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+        seen_headers = self._gather_x_account_headers(
+            controller.DELETE, req,
+            200, 204, 204, 204)    # HEAD DELETE DELETE DELETE
+        self.assertEqual(seen_headers, [
+                {'X-Account-Host': '10.0.0.0:1000',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sda'},
+                {'X-Account-Host': '10.0.0.1:1001',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdb'},
+                {'X-Account-Host': None,
+                 'X-Account-Partition': None,
+                 'X-Account-Device': None}])
+
+    def test_DELETE_x_account_headers_with_more_account_replicas(self):
+        self.app.account_ring.set_replicas(4)
+        req = Request.blank('/a/c', headers={'': ''})
+        controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+        seen_headers = self._gather_x_account_headers(
+            controller.DELETE, req,
+            200, 204, 204, 204)    # HEAD DELETE DELETE DELETE
+        self.assertEqual(seen_headers, [
+                {'X-Account-Host': '10.0.0.0:1000,10.0.0.3:1003',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sda,sdd'},
+                {'X-Account-Host': '10.0.0.1:1001',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdb'},
+                {'X-Account-Host': '10.0.0.2:1002',
+                 'X-Account-Partition': 1,
+                 'X-Account-Device': 'sdc'}])
 
 
 class TestAccountController(unittest.TestCase):
@@ -4394,6 +4871,22 @@ class TestAccountController(unittest.TestCase):
                 self.assertTrue(
                     verb in resp.headers['Allow'])
             self.assertEquals(len(resp.headers['Allow'].split(', ')), 4)
+
+            # Test a CORS OPTIONS request (i.e. including Origin and
+            # Access-Control-Request-Method headers)
+            self.app.allow_account_management = False
+            controller = proxy_server.AccountController(self.app, 'account')
+            req = Request.blank('/account', {'REQUEST_METHOD': 'OPTIONS'},
+                headers = {'Origin': 'http://foo.com',
+                                     'Access-Control-Request-Method': 'GET'})
+            req.content_length = 0
+            resp = controller.OPTIONS(req)
+            self.assertEquals(200, resp.status_int)
+            for verb in 'OPTIONS GET POST HEAD'.split():
+                self.assertTrue(
+                    verb in resp.headers['Allow'])
+            self.assertEquals(len(resp.headers['Allow'].split(', ')), 4)
+
             self.app.allow_account_management = True
             controller = proxy_server.AccountController(self.app, 'account')
             req = Request.blank('/account', {'REQUEST_METHOD': 'OPTIONS'})
@@ -4756,6 +5249,12 @@ class FakeObjectController(object):
             yield node
         for node in ring.get_more_nodes(partition):
             yield node
+
+    def sort_nodes(self, nodes):
+        return nodes
+
+    def set_node_timing(self, node, timing):
+        return
 
 
 class Stub(object):

@@ -793,7 +793,7 @@ class ContainerBroker(DatabaseBroker):
             return (row[0] == 0)
 
     def _commit_puts(self, item_list=None):
-        """Handles commiting rows in .pending files."""
+        """Handles committing rows in .pending files."""
         if self.db_file == ':memory:' or not os.path.exists(self.pending_file):
             return
         if item_list is None:
@@ -1061,7 +1061,7 @@ class ContainerBroker(DatabaseBroker):
         :param marker: marker query
         :param end_marker: end marker query
         :param prefix: prefix query
-        :param delimeter: delimeter for query
+        :param delimiter: delimiter for query
         :param path: if defined, will set the prefix and delimter based on
                      the path
 
@@ -1320,7 +1320,7 @@ class AccountBroker(DatabaseBroker):
             WHERE delete_timestamp < ? """, (timestamp, timestamp, timestamp))
 
     def _commit_puts(self, item_list=None):
-        """Handles commiting rows in .pending files."""
+        """Handles committing rows in .pending files."""
         if self.db_file == ':memory:' or not os.path.exists(self.pending_file):
             return
         if item_list is None:
@@ -1406,28 +1406,6 @@ class AccountBroker(DatabaseBroker):
                     raise
             DatabaseBroker._reclaim(self, conn, container_timestamp)
             conn.commit()
-
-    def get_container_timestamp(self, container_name):
-        """
-        Get the put_timestamp of a container.
-
-        :param container_name: container name
-
-        :returns: put_timestamp of the container
-        """
-        try:
-            self._commit_puts()
-        except LockTimeout:
-            if not self.stale_reads_ok:
-                raise
-        with self.get() as conn:
-            ret = conn.execute('''
-                SELECT put_timestamp FROM container
-                WHERE name = ? AND deleted != 1''',
-                              (container_name,)).fetchone()
-            if ret:
-                ret = ret[0]
-            return ret
 
     def put_container(self, name, put_timestamp, delete_timestamp,
                       object_count, bytes_used):

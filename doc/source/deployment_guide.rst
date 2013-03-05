@@ -237,6 +237,13 @@ disable_fallocate    false       Disable "fast fail" fallocate checks if the
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
+fallocate_reserve    0           You can set fallocate_reserve to the number of
+                                 bytes you'd like fallocate to reserve, whether
+                                 there is space for the given file size or not.
+                                 This is useful for systems that behave badly
+                                 when they completely run out of space; you can
+                                 make the services pretend they're out of space
+                                 early.
 ===================  ==========  =============================================
 
 [object-server]
@@ -348,6 +355,13 @@ disable_fallocate    false       Disable "fast fail" fallocate checks if the
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
+fallocate_reserve    0           You can set fallocate_reserve to the number of
+                                 bytes you'd like fallocate to reserve, whether
+                                 there is space for the given file size or not.
+                                 This is useful for systems that behave badly
+                                 when they completely run out of space; you can
+                                 make the services pretend they're out of space
+                                 early.
 ===================  ==========  ============================================
 
 [container-server]
@@ -410,14 +424,17 @@ account_suppression_time  60                 Seconds to suppress updating an
 
 [container-auditor]
 
-==================  =================  =======================================
-Option              Default            Description
-------------------  -----------------  ---------------------------------------
-log_name            container-auditor  Label used when logging
-log_facility        LOG_LOCAL0         Syslog log facility
-log_level           INFO               Logging level
-interval            1800               Minimum time for a pass to take
-==================  =================  =======================================
+=====================  =================  =======================================
+Option                 Default            Description
+---------------------  -----------------  ---------------------------------------
+log_name               container-auditor  Label used when logging
+log_facility           LOG_LOCAL0         Syslog log facility
+log_level              INFO               Logging level
+interval               1800               Minimum time for a pass to take
+containers_per_second  200                Maximum containers audited per second. 
+                                          Should be tuned according to individual
+                                          system specs. 0 is unlimited.
+=====================  =================  =======================================
 
 ----------------------------
 Account Server Configuration
@@ -452,6 +469,13 @@ disable_fallocate    false       Disable "fast fail" fallocate checks if the
 log_custom_handlers  None        Comma-separated list of functions to call
                                  to setup custom log handlers.
 eventlet_debug       false       If true, turn on debug logging for eventlet
+fallocate_reserve    0           You can set fallocate_reserve to the number of
+                                 bytes you'd like fallocate to reserve, whether
+                                 there is space for the given file size or not.
+                                 This is useful for systems that behave badly
+                                 when they completely run out of space; you can
+                                 make the services pretend they're out of space
+                                 early.
 ===================  ==========  =============================================
 
 [account-server]
@@ -494,6 +518,9 @@ log_name              account-auditor  Label used when logging
 log_facility          LOG_LOCAL0       Syslog log facility
 log_level             INFO             Logging level
 interval              1800             Minimum time for a pass to take
+accounts_per_second   200              Maximum accounts audited per second. 
+                                       Should be tuned according to individual
+                                       system specs. 0 is unlimited. 
 ====================  ===============  =======================================
 
 [account-reaper]

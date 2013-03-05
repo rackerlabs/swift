@@ -31,14 +31,13 @@ import time
 from datetime import datetime
 from urllib import unquote, quote
 from hashlib import md5
-from random import shuffle
 
-from eventlet import sleep, GreenPile, Timeout
+from eventlet import sleep, GreenPile
 from eventlet.queue import Queue
 from eventlet.timeout import Timeout
 
 from swift.common.utils import ContextPool, normalize_timestamp, \
-    config_true_value, public, json
+    config_true_value, public, json, csv_append
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_metadata, check_object_creation, \
     CONTAINER_LISTING_LIMIT, MAX_FILE_SIZE
@@ -49,11 +48,21 @@ from swift.common.http import is_success, is_client_error, HTTP_CONTINUE, \
     HTTP_CREATED, HTTP_MULTIPLE_CHOICES, HTTP_NOT_FOUND, \
     HTTP_INTERNAL_SERVER_ERROR, HTTP_SERVICE_UNAVAILABLE, \
     HTTP_INSUFFICIENT_STORAGE
-from swift.proxy.controllers.base import Controller, delay_denial
+from swift.proxy.controllers.base import Controller, delay_denial, \
+    cors_validation
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPRequestTimeout, \
     HTTPServerError, HTTPServiceUnavailable, Request, Response, \
     HTTPClientDisconnect
+
+
+def segment_listing_iter(listing):
+    listing = iter(listing)
+    while True:
+        seg_dict = listing.next()
+        if isinstance(seg_dict['name'], unicode):
+            seg_dict['name'] = seg_dict['name'].encode('utf-8')
+        yield seg_dict
 
 
 class SegmentedIterable(object):
@@ -76,7 +85,7 @@ class SegmentedIterable(object):
     def __init__(self, controller, container, listing, response=None):
         self.controller = controller
         self.container = container
-        self.listing = iter(listing)
+        self.listing = segment_listing_iter(listing)
         self.segment = 0
         self.segment_dict = None
         self.segment_peek = None
@@ -113,7 +122,7 @@ class SegmentedIterable(object):
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
-            shuffle(nodes)
+            nodes = self.controller.app.sort_nodes(nodes)
             resp = self.controller.GETorHEAD_base(
                 req, _('Object'), partition,
                 self.controller.iter_nodes(partition, nodes,
@@ -261,7 +270,7 @@ class ObjectController(Controller):
             lreq.environ['QUERY_STRING'] = \
                 'format=json&prefix=%s&marker=%s' % (quote(lprefix),
                                                      quote(marker))
-            shuffle(lnodes)
+            nodes = self.app.sort_nodes(lnodes)
             lresp = self.GETorHEAD_base(
                 lreq, _('Container'), lpartition, lnodes, lreq.path_info,
                 len(lnodes))
@@ -279,7 +288,7 @@ class ObjectController(Controller):
             sublisting = json.loads(lresp.body)
             if not sublisting:
                 break
-            marker = sublisting[-1]['name']
+            marker = sublisting[-1]['name'].encode('utf-8')
             yield sublisting
 
     def _remaining_items(self, listing_iter):
@@ -327,7 +336,7 @@ class ObjectController(Controller):
 
         partition, nodes = self.app.object_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
-        shuffle(nodes)
+        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
             req, _('Object'), partition,
             self.iter_nodes(partition, nodes, self.app.object_ring),
@@ -405,18 +414,21 @@ class ObjectController(Controller):
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def GET(self, req):
         """Handler for HTTP GET requests."""
         return self.GETorHEAD(req)
 
     @public
+    @cors_validation
     @delay_denial
     def HEAD(self, req):
         """Handler for HTTP HEAD requests."""
         return self.GETorHEAD(req)
 
     @public
+    @cors_validation
     @delay_denial
     def POST(self, req):
         """HTTP POST request handler."""
@@ -483,22 +495,47 @@ class ObjectController(Controller):
             partition, nodes = self.app.object_ring.get_nodes(
                 self.account_name, self.container_name, self.object_name)
             req.headers['X-Timestamp'] = normalize_timestamp(time.time())
-            headers = []
-            for container in containers:
-                nheaders = dict(req.headers.iteritems())
-                nheaders['Connection'] = 'close'
-                nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-                nheaders['X-Container-Partition'] = container_partition
-                nheaders['X-Container-Device'] = container['device']
-                if delete_at_nodes:
-                    node = delete_at_nodes.pop(0)
-                    nheaders['X-Delete-At-Host'] = '%(ip)s:%(port)s' % node
-                    nheaders['X-Delete-At-Partition'] = delete_at_part
-                    nheaders['X-Delete-At-Device'] = node['device']
-                headers.append(nheaders)
+
+            headers = self._backend_requests(
+                req, len(nodes), container_partition, containers,
+                delete_at_part, delete_at_nodes)
+
             resp = self.make_requests(req, self.app.object_ring, partition,
                                       'POST', req.path_info, headers)
             return resp
+
+    def _backend_requests(self, req, n_outgoing,
+                          container_partition, containers,
+                          delete_at_partition=None, delete_at_nodes=None):
+        headers = [dict(req.headers.iteritems())
+                   for _junk in range(n_outgoing)]
+
+        for header in headers:
+            header['Connection'] = 'close'
+
+        for i, container in enumerate(containers):
+            i = i % len(headers)
+
+            headers[i]['X-Container-Partition'] = container_partition
+            headers[i]['X-Container-Host'] = csv_append(
+                headers[i].get('X-Container-Host'),
+                '%(ip)s:%(port)s' % container)
+            headers[i]['X-Container-Device'] = csv_append(
+                headers[i].get('X-Container-Device'),
+                container['device'])
+
+        for i, node in enumerate(delete_at_nodes or []):
+            i = i % len(headers)
+
+            headers[i]['X-Delete-At-Partition'] = delete_at_partition
+            headers[i]['X-Delete-At-Host'] = csv_append(
+                headers[i].get('X-Delete-At-Host'),
+                '%(ip)s:%(port)s' % node)
+            headers[i]['X-Delete-At-Device'] = csv_append(
+                headers[i].get('X-Delete-At-Device'),
+                node['device'])
+
+        return headers
 
     def _send_file(self, conn, path):
         """Method for a file PUT coro"""
@@ -520,10 +557,12 @@ class ObjectController(Controller):
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
+                start_time = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
                     conn = http_connect(
                         node['ip'], node['port'], node['device'], part, 'PUT',
                         path, headers)
+                self.app.set_node_timing(node, time.time() - start_time)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getexpect()
                 if resp.status == HTTP_CONTINUE:
@@ -541,6 +580,7 @@ class ObjectController(Controller):
                                         _('Expect: 100-continue on %s') % path)
 
     @public
+    @cors_validation
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
@@ -714,22 +754,18 @@ class ObjectController(Controller):
         node_iter = self.iter_nodes(partition, nodes, self.app.object_ring)
         pile = GreenPile(len(nodes))
         chunked = req.headers.get('transfer-encoding')
-        for container in containers:
-            nheaders = dict(req.headers.iteritems())
-            nheaders['Connection'] = 'close'
-            nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-            nheaders['X-Container-Partition'] = container_partition
-            nheaders['X-Container-Device'] = container['device']
+
+        outgoing_headers = self._backend_requests(
+            req, len(nodes), container_partition, containers,
+            delete_at_part, delete_at_nodes)
+
+        for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
             if (req.content_length > 0) or chunked:
                 nheaders['Expect'] = '100-continue'
-            if delete_at_nodes:
-                node = delete_at_nodes.pop(0)
-                nheaders['X-Delete-At-Host'] = '%(ip)s:%(port)s' % node
-                nheaders['X-Delete-At-Partition'] = delete_at_part
-                nheaders['X-Delete-At-Device'] = node['device']
             pile.spawn(self._connect_put_node, node_iter, partition,
                        req.path_info, nheaders, self.app.logger.thread_locals)
+
         conns = [conn for conn in pile if conn]
         if len(conns) <= len(nodes) / 2:
             self.app.logger.error(
@@ -838,6 +874,7 @@ class ObjectController(Controller):
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def DELETE(self, req):
         """HTTP DELETE request handler."""
@@ -923,19 +960,15 @@ class ObjectController(Controller):
                          'was %r' % req.headers['x-timestamp'])
         else:
             req.headers['X-Timestamp'] = normalize_timestamp(time.time())
-        headers = []
-        for container in containers:
-            nheaders = dict(req.headers.iteritems())
-            nheaders['Connection'] = 'close'
-            nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-            nheaders['X-Container-Partition'] = container_partition
-            nheaders['X-Container-Device'] = container['device']
-            headers.append(nheaders)
+
+        headers = self._backend_requests(
+            req, len(nodes), container_partition, containers)
         resp = self.make_requests(req, self.app.object_ring,
                                   partition, 'DELETE', req.path_info, headers)
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def COPY(self, req):
         """HTTP COPY request handler."""

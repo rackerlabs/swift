@@ -26,14 +26,16 @@ from cStringIO import StringIO
 import UserDict
 import time
 from functools import partial
-from datetime import datetime, date, timedelta, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from email.utils import parsedate
 import urlparse
 import urllib2
 import re
 import random
+import functools
+import inspect
 
-from swift.common.utils import reiterate
+from swift.common.utils import reiterate, split_path
 
 
 RESPONSE_REASONS = {
@@ -856,6 +858,31 @@ class Request(object):
         return Response(status=status, headers=dict(headers),
                         app_iter=app_iter, request=self)
 
+    def split_path(self, minsegs=1, maxsegs=None, rest_with_last=False):
+        """
+        Validate and split the Request's path.
+
+        **Examples**::
+
+            ['a'] = split_path('/a')
+            ['a', None] = split_path('/a', 1, 2)
+            ['a', 'c'] = split_path('/a/c', 1, 2)
+            ['a', 'c', 'o/r'] = split_path('/a/c/o/r', 1, 3, True)
+
+        :param path: HTTP Request path to be split
+        :param minsegs: Minimum number of segments to be extracted
+        :param maxsegs: Maximum number of segments to be extracted
+        :param rest_with_last: If True, trailing data will be returned as part
+                               of last segment.  If False, and there is
+                               trailing data, raises ValueError.
+        :returns: list of segments with a length of maxsegs (non-existant
+                  segments will return as None)
+        :raises: ValueError if given an invalid path
+        """
+        return split_path(
+            self.environ.get('SCRIPT_NAME', '') + self.environ['PATH_INFO'],
+            minsegs, maxsegs, rest_with_last)
+
 
 def content_range_header_value(start, stop, size):
     return 'bytes %s-%s/%s' % (start, (stop - 1), size)
@@ -1024,13 +1051,45 @@ class Response(object):
         return app_iter
 
 
+class HTTPException(Response, Exception):
+
+    def __init__(self, *args, **kwargs):
+        Response.__init__(self, *args, **kwargs)
+        Exception.__init__(self, self.status)
+
+
+def wsgify(func):
+    """
+    A decorator for translating functions which take a swob Request object and
+    return a Response object into WSGI callables.  Also catches any raised
+    HTTPExceptions and treats them as a returned Response.
+    """
+    argspec = inspect.getargspec(func)
+    if argspec.args and argspec.args[0] == 'self':
+        @functools.wraps(func)
+        def _wsgify_self(self, env, start_response):
+            try:
+                return func(self, Request(env))(env, start_response)
+            except HTTPException, err_resp:
+                return err_resp(env, start_response)
+        return _wsgify_self
+    else:
+        @functools.wraps(func)
+        def _wsgify_bare(env, start_response):
+            try:
+                return func(Request(env))(env, start_response)
+            except HTTPException, err_resp:
+                return err_resp(env, start_response)
+        return _wsgify_bare
+
+
 class StatusMap(object):
     """
-    A dict-like object that returns Response subclasses/factory functions
+    A dict-like object that returns HTTPException subclasses/factory functions
     where the given key is the status code.
     """
     def __getitem__(self, key):
-        return partial(Response, status=key)
+        return partial(HTTPException, status=key)
 status_map = StatusMap()
 
 
@@ -1057,5 +1116,6 @@ HTTPUnprocessableEntity = status_map[422]
 HTTPClientDisconnect = status_map[499]
 HTTPServerError = status_map[500]
 HTTPInternalServerError = status_map[500]
+HTTPBadGateway = status_map[502]
 HTTPServiceUnavailable = status_map[503]
 HTTPInsufficientStorage = status_map[507]

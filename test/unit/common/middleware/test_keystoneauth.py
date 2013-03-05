@@ -16,7 +16,7 @@
 import unittest
 
 from swift.common.middleware import keystoneauth
-from swift.common.swob import Request, Response, HTTPForbidden
+from swift.common.swob import Request, Response
 from swift.common.http import HTTP_FORBIDDEN
 
 
@@ -49,7 +49,7 @@ class SwiftAuth(unittest.TestCase):
         return Request.blank(path, headers=headers, **kwargs)
 
     def _get_identity_headers(self, status='Confirmed', tenant_id='1',
-                          tenant_name='acct', user='usr', role=''):
+                              tenant_name='acct', user='usr', role=''):
         return dict(X_IDENTITY_STATUS=status,
                     X_TENANT_ID=tenant_id,
                     X_TENANT_NAME=tenant_name,
@@ -59,6 +59,18 @@ class SwiftAuth(unittest.TestCase):
     def _get_successful_middleware(self):
         response_iter = iter([('200 OK', {}, '')])
         return keystoneauth.filter_factory({})(FakeApp(response_iter))
+
+    def test_invalid_request_authorized(self):
+        role = self.test_auth.reseller_admin_role
+        headers = self._get_identity_headers(role=role)
+        req = self._make_request('/', headers=headers)
+        resp = req.get_response(self._get_successful_middleware())
+        self.assertEqual(resp.status_int, 404)
+
+    def test_invalid_request_non_authorized(self):
+        req = self._make_request('/')
+        resp = req.get_response(self._get_successful_middleware())
+        self.assertEqual(resp.status_int, 404)
 
     def test_confirmed_identity_is_authorized(self):
         role = self.test_auth.reseller_admin_role
@@ -75,6 +87,12 @@ class SwiftAuth(unittest.TestCase):
 
     def test_anonymous_is_authorized_for_permitted_referrer(self):
         req = self._make_request(headers={'X_IDENTITY_STATUS': 'Invalid'})
+        req.acl = '.r:*'
+        resp = req.get_response(self._get_successful_middleware())
+        self.assertEqual(resp.status_int, 200)
+
+    def test_anonymous_with_validtoken_authorized_for_permitted_referrer(self):
+        req = self._make_request(headers={'X_IDENTITY_STATUS': 'Confirmed'})
         req.acl = '.r:*'
         resp = req.get_response(self._get_successful_middleware())
         self.assertEqual(resp.status_int, 200)
@@ -112,6 +130,21 @@ class SwiftAuth(unittest.TestCase):
                                  environ={'swift.authorize_override': True})
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 404)
+
+    def test_anonymous_options_allowed(self):
+        req = self._make_request('/v1/AUTH_account',
+                                 environ={'REQUEST_METHOD': 'OPTIONS'})
+        resp = req.get_response(self._get_successful_middleware())
+        self.assertEqual(resp.status_int, 200)
+
+    def test_identified_options_allowed(self):
+        headers = self._get_identity_headers()
+        headers['REQUEST_METHOD'] = 'OPTIONS'
+        req = self._make_request('/v1/AUTH_account',
+                                 headers=self._get_identity_headers(),
+                                 environ={'REQUEST_METHOD': 'OPTIONS'})
+        resp = req.get_response(self._get_successful_middleware())
+        self.assertEqual(resp.status_int, 200)
 
 
 class TestAuthorize(unittest.TestCase):

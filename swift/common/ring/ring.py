@@ -22,14 +22,12 @@ import struct
 from time import time
 import os
 from io import BufferedReader
+from hashlib import md5
+from itertools import chain
+from struct import unpack_from
 
-from swift.common.utils import hash_path, validate_configuration
+from swift.common.utils import hash_path, validate_configuration, json
 from swift.common.ring.utils import tiers_for_dev
-
-try:
-    import simplejson as json
-except ImportError:
-    import json
 
 
 class RingData(object):
@@ -85,7 +83,8 @@ class RingData(object):
         # Write out new-style serialization magic and version:
         file_obj.write(struct.pack('!4sH', 'R1NG', 1))
         ring = self.to_dict()
-        json_text = json.dumps(
+        json_encoder = json.JSONEncoder(sort_keys=True)
+        json_text = json_encoder.encode(
             {'devs': ring['devs'], 'part_shift': ring['part_shift'],
              'replica_count': len(ring['replica2part2dev_id'])})
         json_len = len(json_text)
@@ -100,7 +99,16 @@ class RingData(object):
 
         :param filename: File into which this instance should be serialized.
         """
-        gz_file = GzipFile(filename, 'wb')
+        # Override the timestamp so that the same ring data creates
+        # the same bytes on disk. This makes a checksum comparison a
+        # good way to see if two rings are identical.
+        #
+        # This only works on Python 2.7; on 2.6, we always get the
+        # current time in the gzip output.
+        try:
+            gz_file = GzipFile(filename, 'wb', mtime=1300507380.0)
+        except TypeError:
+            gz_file = GzipFile(filename, 'wb')
         self.serialize_v1(gz_file)
         gz_file.close()
 
@@ -158,7 +166,7 @@ class Ring(object):
 
     @property
     def replica_count(self):
-        """Number of replicas used in the ring."""
+        """Number of replicas (full or partial) used in the ring."""
         return len(self._replica2part2dev_id)
 
     @property
@@ -184,7 +192,8 @@ class Ring(object):
 
     def _get_part_nodes(self, part):
         seen_ids = set()
-        return [self._devs[r[part]] for r in self._replica2part2dev_id
+        return [self._devs[r[part]] for r in
+                (rpd for rpd in self._replica2part2dev_id if len(rpd) > part)
                 if not (r[part] in seen_ids or seen_ids.add(r[part]))]
 
     def get_part_nodes(self, part):
@@ -241,6 +250,11 @@ class Ring(object):
         """
         Generator to get extra nodes for a partition for hinted handoff.
 
+        The handoff nodes will try to be in zones other than the
+        primary zones, will take into account the device weights, and
+        will usually keep the same sequences of handoffs even with
+        ring changes.
+
         :param part: partition to get handoff nodes for
         :returns: generator of node dicts
 
@@ -248,22 +262,38 @@ class Ring(object):
         """
         if time() > self._rtime:
             self._reload()
-        used_tiers = set()
-        for part2dev_id in self._replica2part2dev_id:
-            for tier in tiers_for_dev(self._devs[part2dev_id[part]]):
-                used_tiers.add(tier)
-
-        for level in self.tiers_by_length:
-            tiers = list(level)
-            while tiers:
-                tier = tiers.pop(part % len(tiers))
-                if tier in used_tiers:
-                    continue
-                for i in xrange(len(self.tier2devs[tier])):
-                    dev = self.tier2devs[tier][(part + i) %
-                                               len(self.tier2devs[tier])]
-                    if not dev.get('weight'):
-                        continue
-                    yield dev
-                    used_tiers.update(tiers_for_dev(dev))
-                    break
+        used = set(part2dev_id[part]
+                   for part2dev_id in self._replica2part2dev_id
+                   if len(part2dev_id) > part)
+        same_zones = set(self._devs[part2dev_id[part]]['zone']
+                         for part2dev_id in self._replica2part2dev_id
+                         if len(part2dev_id) > part)
+        parts = len(self._replica2part2dev_id[0])
+        start = struct.unpack_from(
+            '>I', md5(str(part)).digest())[0] >> self._part_shift
+        inc = int(parts / 65536) or 1
+        # Two loops for execution speed, second loop doesn't need the zone
+        # check.
+        for handoff_part in chain(xrange(start, parts, inc),
+                                  xrange(inc - ((parts - start) % inc),
+                                         start, inc)):
+            for part2dev_id in self._replica2part2dev_id:
+                try:
+                    dev_id = part2dev_id[handoff_part]
+                    dev = self._devs[dev_id]
+                    if dev_id not in used and dev['zone'] not in same_zones:
+                        yield dev
+                        used.add(dev_id)
+                except IndexError:  # Happens with partial replicas
+                    pass
+        for handoff_part in chain(xrange(start, parts, inc),
+                                  xrange(inc - ((parts - start) % inc),
+                                         start, inc)):
+            for part2dev_id in self._replica2part2dev_id:
+                try:
+                    dev_id = part2dev_id[handoff_part]
+                    if dev_id not in used:
+                        yield self._devs[dev_id]
+                        used.add(dev_id)
+                except IndexError:  # Happens with partial replicas
+                    pass

@@ -17,14 +17,10 @@ import errno
 import os
 
 from swift.common.swob import Request, Response
-from swift.common.utils import split_path, get_logger, config_true_value
+from swift.common.utils import get_logger, config_true_value, json
 from swift.common.constraints import check_mount
 from resource import getpagesize
 from hashlib import md5
-try:
-    import simplejson as json
-except ImportError:
-    import json
 
 
 class ReconMiddleware(object):
@@ -276,7 +272,7 @@ class ReconMiddleware(object):
         return sockstat
 
     def GET(self, req):
-        root, rcheck, rtype = split_path(req.path, 1, 3, True)
+        root, rcheck, rtype = req.split_path(1, 3, True)
         all_rtypes = ['account', 'container', 'object']
         if rcheck == "mem":
             content = self.get_mem()
