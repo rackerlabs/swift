@@ -1,3 +1,11 @@
+swift (1.7.7~rax2) lucid; urgency=low
+
+  * 71a20d0 Fix misspelled variable name
+  * 7fd4323 David Hadas email address has been changed.
+  * 1d8a02f Added per disk PUT timing monitoring support.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 06 Mar 2013 17:37:00 +0000
+
 swift (1.7.7~rax1) lucid; urgency=low
 
   * e064ba1 Updated get_more_nodes algorithm
