@@ -202,3 +202,17 @@ Static Large Objects
 .. automodule:: swift.common.middleware.slo
     :members:
     :show-inheritance:
+
+List Endpoints
+==============
+
+.. automodule:: swift.common.middleware.list_endpoints
+    :members:
+    :show-inheritance:
+
+Account Quotas
+================
+
+.. automodule:: swift.common.middleware.account_quotas
+    :members:
+    :show-inheritance:
