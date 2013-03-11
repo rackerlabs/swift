@@ -1,7 +1,23 @@
+swift (1.7.7~rax3) lucid; urgency=low
+
+  * 5e427e5 Add exception to swift-drive-audit if no date in line.
+
+  * 28c75db Account quotas
+
+  * d9fb84d Fix some unreadable code.
+
+  * 48380c5 Merge "simplify the chexor function"
+
+  * 0219b08 simplify the chexor function
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 11 Mar 2013 17:37:00 +0000
+
 swift (1.7.7~rax2) lucid; urgency=low
 
   * 71a20d0 Fix misspelled variable name
+
   * 7fd4323 David Hadas email address has been changed.
+
   * 1d8a02f Added per disk PUT timing monitoring support.
 
  -- Gregory Holt <gholt@rackspace.com>  Thu, 06 Mar 2013 17:37:00 +0000
