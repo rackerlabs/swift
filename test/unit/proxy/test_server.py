@@ -247,7 +247,7 @@ def fake_http_connect(*code_iter, **kwargs):
                        'x-object-meta-test': 'testing',
                        'etag': etag,
                        'x-works': 'yes',
-                       'x-account-container-count': 12345}
+                       'x-account-container-count': kwargs.get('count', 12345)}
             if not self.timestamp:
                 del headers['x-timestamp']
             try:
@@ -444,6 +444,32 @@ class TestController(unittest.TestCase):
             p, n = self.account_ring.get_nodes(self.account)
         self.assertEqual(p, partition)
         self.assertEqual(n, nodes)
+
+    def test_account_info_container_count(self):
+        with save_globals():
+            set_http_connect(200, count=123)
+            partition, nodes, count = \
+                self.controller.account_info(self.account)
+            self.assertEquals(count, 123)
+        with save_globals():
+            set_http_connect(200, count='123')
+            partition, nodes, count = \
+                self.controller.account_info(self.account)
+            self.assertEquals(count, 123)
+        with save_globals():
+            cache_key = get_account_memcache_key(self.account)
+            account_info = {'status': 200, 'container_count': 1234}
+            self.memcache.set(cache_key, account_info)
+            partition, nodes, count = \
+                self.controller.account_info(self.account)
+            self.assertEquals(count, 1234)
+        with save_globals():
+            cache_key = get_account_memcache_key(self.account)
+            account_info = {'status': 200, 'container_count': '1234'}
+            self.memcache.set(cache_key, account_info)
+            partition, nodes, count = \
+                self.controller.account_info(self.account)
+            self.assertEquals(count, 1234)
 
     def test_make_requests(self):
         with save_globals():
@@ -4060,30 +4086,6 @@ class TestObjectController(unittest.TestCase):
                 'x-auth-token, x-foo',
                 sortHeaderNames(resp.headers['access-control-allow-headers']))
 
-    def test_CORS_invalid_origin(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
-
-            def stubContainerInfo(*args):
-                return {
-                    'cors': {
-                        'allow_origin': 'http://baz'
-                    }
-                }
-            controller.container_info = stubContainerInfo
-
-            def objectGET(controller, req):
-                return Response()
-
-            req = Request.blank(
-                '/a/c/o.jpg',
-                {'REQUEST_METHOD': 'GET'},
-                headers={'Origin': 'http://foo.bar'})
-
-            resp = cors_validation(objectGET)(controller, req)
-
-            self.assertEquals(401, resp.status_int)
-
     def test_CORS_valid(self):
         with save_globals():
             controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
@@ -4912,30 +4914,6 @@ class TestContainerController(unittest.TestCase):
             self.assertEquals(
                 'x-auth-token, x-foo',
                 sortHeaderNames(resp.headers['access-control-allow-headers']))
-
-    def test_CORS_invalid_origin(self):
-        with save_globals():
-            controller = proxy_server.ContainerController(self.app, 'a', 'c')
-
-            def stubContainerInfo(*args):
-                return {
-                    'cors': {
-                        'allow_origin': 'http://baz'
-                    }
-                }
-            controller.container_info = stubContainerInfo
-
-            def containerGET(controller, req):
-                return Response()
-
-            req = Request.blank(
-                '/a/c/o.jpg',
-                {'REQUEST_METHOD': 'GET'},
-                headers={'Origin': 'http://foo.bar'})
-
-            resp = cors_validation(containerGET)(controller, req)
-
-            self.assertEquals(401, resp.status_int)
 
     def test_CORS_valid(self):
         with save_globals():

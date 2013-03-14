@@ -165,9 +165,6 @@ def cors_validation(func):
                 controller.container_info(controller.account_name,
                                           controller.container_name)
             cors_info = container_info.get('cors', {})
-            if not controller.is_origin_allowed(cors_info, req_origin):
-                # invalid CORS request
-                return Response(status=HTTP_UNAUTHORIZED)
 
             # Call through to the decorated method
             resp = func(*a, **kw)
@@ -387,7 +384,10 @@ class Controller(object):
                 container_count = 0
             else:
                 result_code = cache_value['status']
-                container_count = cache_value['container_count']
+                try:
+                    container_count = int(cache_value['container_count'])
+                except ValueError:
+                    container_count = 0
             if result_code == HTTP_OK:
                 return partition, nodes, container_count
             elif result_code == HTTP_NOT_FOUND and not autocreate:
@@ -456,7 +456,11 @@ class Controller(object):
                                   account_info,
                                   time=cache_timeout)
         if result_code == HTTP_OK:
-            return partition, nodes, account_info['container_count']
+            try:
+                container_count = int(account_info['container_count'])
+            except ValueError:
+                container_count = 0
+            return partition, nodes, container_count
         return None, None, None
 
     def container_info(self, account, container, account_autocreate=False):
