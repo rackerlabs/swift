@@ -1,3 +1,17 @@
+swift (1.7.7~rax4) lucid; urgency=low
+
+  * f6e29b8 Remove check for valid Origin for the "actual request".
+
+  * 35acd59 Fix swift-ring-builder's list_parts command.
+
+  * ebcd60f Add a region tier to Swift's ring.
+
+  * b373278 Add missing CONTRIBUTING.md to source tarball
+
+  * f6d1fa1 Fixed bug with account_info
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 14 Mar 2013 13:27:00 +0000
+
 swift (1.7.7~rax3) lucid; urgency=low
 
   * 5e427e5 Add exception to swift-drive-audit if no date in line.
