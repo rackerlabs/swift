@@ -1,3 +1,25 @@
+swift (1.8.1~rax1) lucid; urgency=low
+
+  * 92e877a Fix bugs in bulk and slo and small doc change.
+  * c1dfe89 instruction command was not documented in right format.
+  * 7df4323 Fix for attempted COPY of objects gt MAX_FILE_SIZE
+  * 70aa7f9 Fix misspelled variable.
+  * 1b15074 fix stupid bug with bulk delete max items
+  * 7dd9661 Use role in insensitive case in keystoneauth.
+  * 6227817 version bump for 1.8.1
+  * 9e777bd AUTHORS/CHANGELOG uploades for the next release
+  * a5ba0d5 increase unit test coverage on account server
+  * 68355d7 Instruction for multi node setup misses /var/run/swift creation
+  * d42a78a Basic ring builder validation.
+  * b530de2 swift-ring-builder blows up when not supported command requested.
+  * d88d12b Small clarification to swift-recon section of admin guide.
+  * e56832c Fix format device
+  * 229ba53 Fix crash in swift-ring-builder's list_parts command.
+  * 35e07e2 Permit functional tests against Swift with Keystone
+  * 157c3c9 Add tests and doc entry for request.environ[reseller_request]
+  * cb69dc8 Give friendly notification in swift-get-nodes
+  * 8b14003 Improved container-sync resiliency
+
 swift (1.7.7~rax4) lucid; urgency=low
 
   * f6e29b8 Remove check for valid Origin for the "actual request".
