@@ -20,6 +20,8 @@ swift (1.8.1~rax1) lucid; urgency=low
   * cb69dc8 Give friendly notification in swift-get-nodes
   * 8b14003 Improved container-sync resiliency
 
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 21 Mar 2013 13:27:00 +0000
+
 swift (1.7.7~rax4) lucid; urgency=low
 
   * f6e29b8 Remove check for valid Origin for the "actual request".
