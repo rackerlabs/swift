@@ -19,7 +19,7 @@ from xml.sax import saxutils
 from swift.common.swob import Request, HTTPBadGateway, \
     HTTPCreated, HTTPBadRequest, HTTPNotFound, HTTPUnauthorized, HTTPOk, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPNotAcceptable, \
-    wsgify
+    HTTPLengthRequired, wsgify
 from swift.common.utils import json, TRUE_VALUES
 from swift.common.constraints import check_utf8, MAX_FILE_SIZE
 from swift.common.http import HTTP_BAD_REQUEST, HTTP_UNAUTHORIZED, \
@@ -191,13 +191,9 @@ class Bulk(object):
         objs_to_delete = []
         if req.content_length is None and \
                 req.headers.get('transfer-encoding', '').lower() != 'chunked':
-            raise HTTPBadRequest('Invalid request: no content sent.')
+            raise HTTPLengthRequired(request=req)
 
         while data_remaining:
-            if len(objs_to_delete) > self.max_deletes_per_request:
-                raise HTTPRequestEntityTooLarge(
-                    'Maximum Bulk Deletes: %d per request' %
-                    self.max_deletes_per_request)
             if '\n' in line:
                 obj_to_delete, line = line.split('\n', 1)
                 objs_to_delete.append(unquote(obj_to_delete))
@@ -209,6 +205,10 @@ class Bulk(object):
                     data_remaining = False
                     if line.strip():
                         objs_to_delete.append(unquote(line))
+            if len(objs_to_delete) > self.max_deletes_per_request:
+                raise HTTPRequestEntityTooLarge(
+                    'Maximum Bulk Deletes: %d per request' %
+                    self.max_deletes_per_request)
             if len(line) > MAX_PATH_LENGTH * 2:
                 raise HTTPBadRequest('Invalid File Name')
         return objs_to_delete
@@ -295,7 +295,7 @@ class Bulk(object):
             return HTTPNotAcceptable(request=req)
         if req.content_length is None and \
                 req.headers.get('transfer-encoding', '').lower() != 'chunked':
-            return HTTPBadRequest('Invalid request: no content sent.')
+            return HTTPLengthRequired(request=req)
         try:
             vrs, account, extract_base = req.split_path(2, 3, True)
         except ValueError:

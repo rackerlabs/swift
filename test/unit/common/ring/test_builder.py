@@ -47,6 +47,18 @@ class TestRingBuilder(unittest.TestCase):
         self.assertEquals(rb.devs_changed, False)
         self.assertEquals(rb.version, 0)
 
+    def test_overlarge_part_powers(self):
+        ring.RingBuilder(32, 3, 1)  # passes by not crashing
+        self.assertRaises(ValueError, ring.RingBuilder, 33, 3, 1)
+
+    def test_insufficient_replicas(self):
+        ring.RingBuilder(8, 1.0, 1)  # passes by not crashing
+        self.assertRaises(ValueError, ring.RingBuilder, 8, 0.999, 1)
+
+    def test_negative_min_part_hours(self):
+        ring.RingBuilder(8, 3, 0)  # passes by not crashing
+        self.assertRaises(ValueError, ring.RingBuilder, 8, 3, -1)
+
     def test_get_ring(self):
         rb = ring.RingBuilder(8, 3, 1)
         rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
@@ -797,6 +809,8 @@ class TestRingBuilder(unittest.TestCase):
 
     def test_get_part_devices(self):
         rb = ring.RingBuilder(8, 3, 1)
+        self.assertEqual(rb.get_part_devices(0), [])
+
         rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
                     'ip': '127.0.0.1', 'port': 10000, 'device': 'sda1'})
         rb.add_dev({'id': 1, 'region': 0, 'zone': 1, 'weight': 1,
