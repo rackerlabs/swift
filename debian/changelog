@@ -1,3 +1,12 @@
+swift (1.8.1~rax2) lucid; urgency=low
+
+  * d2d9a15 Fixing SLO range requests
+  * 60489cd additional unit test coverage for container/server.py
+  * a979c80 Add support for Hash Prefix
+  * 05c8d61 Fix for unicode issues in staticweb
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 27 Mar 2013 13:27:00 +0000
+
 swift (1.8.1~rax1) lucid; urgency=low
 
   * 92e877a Fix bugs in bulk and slo and small doc change.
