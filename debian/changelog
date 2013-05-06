@@ -1,3 +1,9 @@
+swift (1.8.1~rax3) lucid; urgency=low
+
+  * adc723d Refactor Bulk middleware to handle long running requests
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 6 May 2013 13:27:00 +0000
+
 swift (1.8.1~rax2) lucid; urgency=low
 
   * d2d9a15 Fixing SLO range requests
