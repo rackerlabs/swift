@@ -1,3 +1,48 @@
+swift (1.8.1~rax5) lucid; urgency=low
+
+  * 6b4cba8 Merge "close socket on exceptions"
+  * bd3ca77 Fix ValueError from handoff logging.
+  * f85cf2b close socket on exceptions
+  * deb01b8 Merge "Add unit tests to ensure TZ variable remains set"
+  * af8b6e1 Merge "Move common code into a separate function."
+  * 4a1f3d3 Merge "Add ability to save builder data to a disk file"
+  * eb658a1 Add unit tests to ensure TZ variable remains set
+  * 7bc9b0c Merge "Set TZ environment variable to avoid a stat call"
+  * 53f3c61 Merge "Fix two documentation warnings."
+  * d1f1e9f Merge "Don't delete containers when they weren't created."
+  * 306c754 Set TZ environment variable to avoid a stat call
+  * 6acac14 Move common code into a separate function.
+  * 69cf78b Moved tests for moved obj.base code
+  * d754b59 Merge "Moved some code out of swift.obj.replicator"
+  * b358a5c Merge "Autocreate cleanups"
+  * 7d765bb Merge "Remove dead code."
+  * fd3acd2 Autocreate cleanups
+  * cc040a9 Add ability to save builder data to a disk file
+  * 678a3ae Merge "Skip IPv6 addresses in cname_lookup middleware."
+  * d85e090 Merge "Metadata retrieving from sqlite must be str for key"
+  * 959f5e7 Merge "Implementation of replication servers"
+  * dc10d99 Remove dead code.
+  * 5015724 Merge "Refactor Bulk middleware to handle long running requests"
+  * e7ce290 Metadata retrieving from sqlite must be str for key
+  * 81623cf Perform mount check after REST params valid on PUT
+  * 884b7bb Merge "Fix obscure double url bug in container quota middleware"
+  * 597072c Fix obscure double url bug in container quota middleware
+  * 8825c9c Enhance log msg to report referer and user-agent
+  * 7d625f6 Merge "Allow 2 TempURL keys per account."
+  * 1abe5dd Merge "Doc changes for new pip-requirements"
+  * 9fe15dd Moved some code out of swift.obj.replicator
+  * 4f2f243 Fix two documentation warnings.
+  * 5f295d0 Don't delete containers when they weren't created.
+  * af2607c Refactor Bulk middleware to handle long running requests
+  * 21343ab Allow 2 TempURL keys per account.
+  * c3e6f3a Merge "have tempurl allow OPTIONS requests"
+  * 93768d6 releasing 1.8.1~rax4
+  * 6754814 have tempurl allow OPTIONS requests
+  * d3bc10d have tempurl allow OPTIONS requests
+  * f9c5348 Fixed issue with use of delimiter in container queries.
+
+ -- Michael Barton <michael.barton@rackspace.com>  Wed, 22 May 2013 13:27:00 +0000
+
 swift (1.8.1~rax4) lucid; urgency=low
 
   * d3bc10d make tempurl pass on OPTIONS requests
