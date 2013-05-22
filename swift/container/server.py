@@ -37,7 +37,7 @@ from swift.common.http import HTTP_NOT_FOUND, is_success
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
-    HTTPInsufficientStorage, HTTPNotAcceptable
+    HTTPInsufficientStorage, HTTPNotAcceptable, HeaderKeyDict
 
 DATADIR = 'containers'
 
@@ -55,6 +55,18 @@ class ContainerController(object):
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
+        replication_server = conf.get('replication_server', None)
+        if replication_server is None:
+            allowed_methods = ['DELETE', 'PUT', 'HEAD', 'GET', 'REPLICATE',
+                               'POST']
+        else:
+            replication_server = config_true_value(replication_server)
+            if replication_server:
+                allowed_methods = ['REPLICATE']
+            else:
+                allowed_methods = ['DELETE', 'PUT', 'HEAD', 'GET', 'POST']
+        self.replication_server = replication_server
+        self.allowed_methods = allowed_methods
         self.allowed_sync_hosts = [
             h.strip()
             for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
@@ -126,12 +138,14 @@ class ContainerController(object):
             account_ip, account_port = account_host.rsplit(':', 1)
             new_path = '/' + '/'.join([account, container])
             info = broker.get_info()
-            account_headers = {
+            account_headers = HeaderKeyDict({
                 'x-put-timestamp': info['put_timestamp'],
                 'x-delete-timestamp': info['delete_timestamp'],
                 'x-object-count': info['object_count'],
                 'x-bytes-used': info['bytes_used'],
-                'x-trans-id': req.headers.get('x-trans-id', '-')}
+                'x-trans-id': req.headers.get('x-trans-id', '-'),
+                'user-agent': 'container-server %s' % os.getpid(),
+                'referer': req.as_referer()})
             if req.headers.get('x-account-override-deleted', 'no').lower() == \
                     'yes':
                 account_headers['x-account-override-deleted'] = 'yes'
@@ -513,6 +527,8 @@ class ContainerController(object):
                 try:
                     method = getattr(self, req.method)
                     getattr(method, 'publicly_accessible')
+                    if req.method not in self.allowed_methods:
+                        raise AttributeError('Not allowed method.')
                 except AttributeError:
                     res = HTTPMethodNotAllowed()
                 else:

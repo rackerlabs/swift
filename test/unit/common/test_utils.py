@@ -19,13 +19,14 @@ from __future__ import with_statement
 from test.unit import temptree
 import ctypes
 import errno
+import eventlet
 import logging
-import mimetools
 import os
 import random
 import re
 import socket
 import sys
+from textwrap import dedent
 import time
 import unittest
 from threading import Thread
@@ -35,10 +36,8 @@ from shutil import rmtree
 from StringIO import StringIO
 from functools import partial
 from tempfile import TemporaryFile, NamedTemporaryFile
-from logging import handlers as logging_handlers
 
-from eventlet import sleep
-from mock import patch
+from mock import MagicMock, patch
 
 from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ConnectionTimeout)
@@ -369,7 +368,7 @@ class TestUtils(unittest.TestCase):
         utils.sys.stderr = stde
         self.assertRaises(SystemExit, utils.parse_options, once=True,
                           test_args=[])
-        self.assert_('missing config file' in stdo.getvalue())
+        self.assert_('missing config' in stdo.getvalue())
 
         # verify conf file must exist, context manager will delete temp file
         with NamedTemporaryFile() as f:
@@ -422,7 +421,7 @@ class TestUtils(unittest.TestCase):
 
         try:
             utils.SysLogHandler = syslog_handler_catcher
-            logger = utils.get_logger({
+            utils.get_logger({
                 'log_facility': 'LOG_LOCAL3',
             }, 'server', log_route='server')
             self.assertEquals([
@@ -431,7 +430,7 @@ class TestUtils(unittest.TestCase):
                 syslog_handler_args)
 
             syslog_handler_args = []
-            logger = utils.get_logger({
+            utils.get_logger({
                 'log_facility': 'LOG_LOCAL3',
                 'log_address': '/foo/bar',
             }, 'server', log_route='server')
@@ -445,7 +444,7 @@ class TestUtils(unittest.TestCase):
 
             # Using UDP with default port
             syslog_handler_args = []
-            logger = utils.get_logger({
+            utils.get_logger({
                 'log_udp_host': 'syslog.funtimes.com',
             }, 'server', log_route='server')
             self.assertEquals([
@@ -456,7 +455,7 @@ class TestUtils(unittest.TestCase):
 
             # Using UDP with non-default port
             syslog_handler_args = []
-            logger = utils.get_logger({
+            utils.get_logger({
                 'log_udp_host': 'syslog.funtimes.com',
                 'log_udp_port': '2123',
             }, 'server', log_route='server')
@@ -530,18 +529,23 @@ class TestUtils(unittest.TestCase):
             self.assert_('my error message' in log_msg)
 
             # test eventlet.Timeout
-            log_exception(ConnectionTimeout(42, 'my error message'))
+            connection_timeout = ConnectionTimeout(42, 'my error message')
+            log_exception(connection_timeout)
             log_msg = strip_value(sio)
             self.assert_('Traceback' not in log_msg)
             self.assert_('ConnectionTimeout' in log_msg)
             self.assert_('(42s)' in log_msg)
             self.assert_('my error message' not in log_msg)
-            log_exception(MessageTimeout(42, 'my error message'))
+            connection_timeout.cancel()
+
+            message_timeout = MessageTimeout(42, 'my error message')
+            log_exception(message_timeout)
             log_msg = strip_value(sio)
             self.assert_('Traceback' not in log_msg)
             self.assert_('MessageTimeout' in log_msg)
             self.assert_('(42s)' in log_msg)
             self.assert_('my error message' in log_msg)
+            message_timeout.cancel()
 
             # test unhandled
             log_exception(Exception('my error message'))
@@ -627,7 +631,7 @@ class TestUtils(unittest.TestCase):
         self.assert_('127.0.0.1' in myips)
 
     def test_hash_path(self):
-        _prefix = utils.HASH_PATH_PREFIX 
+        _prefix = utils.HASH_PATH_PREFIX
         utils.HASH_PATH_PREFIX = ''
         # Yes, these tests are deliberately very fragile. We want to make sure
         # that if someones changes the results hash_path produces, they know it
@@ -723,6 +727,84 @@ log_name = %(yarr)s'''
             self.assertEquals(result, expected)
         os.unlink('/tmp/test')
         self.assertRaises(SystemExit, utils.readconf, '/tmp/test')
+
+    def test_readconf_dir(self):
+        config_dir = {
+            'server.conf.d/01.conf': """
+            [DEFAULT]
+            port = 8080
+            foo = bar
+
+            [section1]
+            name=section1
+            """,
+            'server.conf.d/section2.conf': """
+            [DEFAULT]
+            port = 8081
+            bar = baz
+
+            [section2]
+            name=section2
+            """,
+            'other-server.conf.d/01.conf': """
+            [DEFAULT]
+            port = 8082
+
+            [section3]
+            name=section3
+            """
+        }
+        # strip indent from test config contents
+        config_dir = dict((f, dedent(c)) for (f, c) in config_dir.items())
+        with temptree(*zip(*config_dir.items())) as path:
+            conf_dir = os.path.join(path, 'server.conf.d')
+            conf = utils.readconf(conf_dir)
+        expected = {
+            '__file__': os.path.join(path, 'server.conf.d'),
+            'log_name': None,
+            'section1': {
+                'port': '8081',
+                'foo': 'bar',
+                'bar': 'baz',
+                'name': 'section1',
+            },
+            'section2': {
+                'port': '8081',
+                'foo': 'bar',
+                'bar': 'baz',
+                'name': 'section2',
+            },
+        }
+        self.assertEquals(conf, expected)
+
+    def test_readconf_dir_ignores_hidden_and_nondotconf_files(self):
+        config_dir = {
+            'server.conf.d/01.conf': """
+            [section1]
+            port = 8080
+            """,
+            'server.conf.d/.01.conf.swp': """
+            [section]
+            port = 8081
+            """,
+            'server.conf.d/01.conf-bak': """
+            [section]
+            port = 8082
+            """,
+        }
+        # strip indent from test config contents
+        config_dir = dict((f, dedent(c)) for (f, c) in config_dir.items())
+        with temptree(*zip(*config_dir.items())) as path:
+            conf_dir = os.path.join(path, 'server.conf.d')
+            conf = utils.readconf(conf_dir)
+        expected = {
+            '__file__': os.path.join(path, 'server.conf.d'),
+            'log_name': None,
+            'section1': {
+                'port': '8080',
+            },
+        }
+        self.assertEquals(conf, expected)
 
     def test_drop_privileges(self):
         user = getuser()
@@ -927,6 +1009,26 @@ log_name = %(yarr)s'''
             f4 = os.path.join(t, 'folder2/3.txt')
             for f in [f1, f2, f3, f4]:
                 self.assert_(f in folder_texts)
+
+    def test_search_tree_with_directory_ext_match(self):
+        files = (
+            'object-server/object-server.conf-base',
+            'object-server/1.conf.d/base.conf',
+            'object-server/1.conf.d/1.conf',
+            'object-server/2.conf.d/base.conf',
+            'object-server/2.conf.d/2.conf',
+            'object-server/3.conf.d/base.conf',
+            'object-server/3.conf.d/3.conf',
+            'object-server/4.conf.d/base.conf',
+            'object-server/4.conf.d/4.conf',
+        )
+        with temptree(files) as t:
+            conf_dirs = utils.search_tree(t, 'object-server', '.conf',
+                                          dir_ext='conf.d')
+        self.assertEquals(len(conf_dirs), 4)
+        for i in range(4):
+            conf_dir = os.path.join(t, 'object-server/%d.conf.d' % (i + 1))
+            self.assert_(conf_dir in conf_dirs)
 
     def test_write_file(self):
         with temptree([]) as t:
@@ -1175,6 +1277,53 @@ log_name = %(yarr)s'''
         finally:
             utils._sys_fallocate = orig__sys_fallocate
 
+    def test_generate_trans_id(self):
+        fake_time = 1366428370.5163341
+        with patch.object(utils.time, 'time', return_value=fake_time):
+            trans_id = utils.generate_trans_id('')
+            self.assertEquals(len(trans_id), 34)
+            self.assertEquals(trans_id[:2], 'tx')
+            self.assertEquals(trans_id[23], '-')
+            self.assertEquals(int(trans_id[24:], 16), int(fake_time))
+        with patch.object(utils.time, 'time', return_value=fake_time):
+            trans_id = utils.generate_trans_id('-suffix')
+            self.assertEquals(len(trans_id), 41)
+            self.assertEquals(trans_id[:2], 'tx')
+            self.assertEquals(trans_id[34:], '-suffix')
+            self.assertEquals(trans_id[23], '-')
+            self.assertEquals(int(trans_id[24:34], 16), int(fake_time))
+
+    def test_get_trans_id_time(self):
+        ts = utils.get_trans_id_time('tx8c8bc884cdaf499bb29429aa9c46946e')
+        self.assertEquals(ts, None)
+        ts = utils.get_trans_id_time('tx1df4ff4f55ea45f7b2ec2-0051720c06')
+        self.assertEquals(ts, 1366428678)
+        self.assertEquals(
+            time.asctime(time.gmtime(ts)) + ' UTC',
+            'Sat Apr 20 03:31:18 2013 UTC')
+        ts = utils.get_trans_id_time(
+            'tx1df4ff4f55ea45f7b2ec2-0051720c06-suffix')
+        self.assertEquals(ts, 1366428678)
+        self.assertEquals(
+            time.asctime(time.gmtime(ts)) + ' UTC',
+            'Sat Apr 20 03:31:18 2013 UTC')
+        ts = utils.get_trans_id_time('')
+        self.assertEquals(ts, None)
+        ts = utils.get_trans_id_time('garbage')
+        self.assertEquals(ts, None)
+        ts = utils.get_trans_id_time('tx1df4ff4f55ea45f7b2ec2-almostright')
+        self.assertEquals(ts, None)
+
+    def test_tpool_reraise(self):
+        with patch.object(utils.tpool, 'execute', lambda f: f()):
+            self.assertTrue(
+                utils.tpool_reraise(MagicMock(return_value='test1')), 'test1')
+            self.assertRaises(Exception,
+                utils.tpool_reraise, MagicMock(side_effect=Exception('test2')))
+            self.assertRaises(BaseException,
+                utils.tpool_reraise,
+                MagicMock(side_effect=BaseException('test3')))
+
 
 class TestStatsdLogging(unittest.TestCase):
     def test_get_logger_statsd_client_not_specified(self):
@@ -1314,6 +1463,66 @@ class TestStatsdLogging(unittest.TestCase):
         self.assertEquals(mock_controller.called, 'timing')
         self.assertEquals(mock_controller.args[0], 'METHOD.errors.timing')
         self.assert_(mock_controller.args[1] > 0)
+
+
+class UnsafeXrange(object):
+    """
+    Like xrange(limit), but with extra context switching to screw things up.
+    """
+    def __init__(self, upper_bound):
+        self.current = 0
+        self.concurrent_calls = 0
+        self.upper_bound = upper_bound
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        if self.concurrent_calls > 0:
+            raise ValueError("concurrent access is bad, mmmkay? (%r)")
+
+        self.concurrent_calls += 1
+        try:
+            if self.current >= self.upper_bound:
+                raise StopIteration
+            else:
+                val = self.current
+                self.current += 1
+                eventlet.sleep()   # yield control
+                return val
+        finally:
+            self.concurrent_calls -= 1
+
+
+class TestGreenthreadSafeIterator(unittest.TestCase):
+    def increment(self, iterable):
+        plus_ones = []
+        for n in iterable:
+            plus_ones.append(n + 1)
+        return plus_ones
+
+    def test_setup_works(self):
+        # it should work without concurrent access
+        self.assertEquals([0, 1, 2, 3], list(UnsafeXrange(4)))
+
+        iterable = UnsafeXrange(10)
+        pile = eventlet.GreenPile(2)
+        for _ in xrange(2):
+            pile.spawn(self.increment, iterable)
+
+        try:
+            response = sorted([resp for resp in pile])
+            self.assertTrue(False, "test setup is insufficiently crazy")
+        except ValueError:
+            pass
+
+    def test_access_is_serialized(self):
+        pile = eventlet.GreenPile(2)
+        iterable = utils.GreenthreadSafeIterator(UnsafeXrange(10))
+        for _ in xrange(2):
+            pile.spawn(self.increment, iterable)
+        response = sorted(sum([resp for resp in pile], []))
+        self.assertEquals(range(1, 11), response)
 
 
 class TestStatsdLoggingDelegation(unittest.TestCase):
@@ -1576,7 +1785,6 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
             self.assertEquals(called, [12345])
 
     def test_fsync_bad_fullsync(self):
-        called = []
         class FCNTL:
             F_FULLSYNC = 123
             def fcntl(self, fd, op):

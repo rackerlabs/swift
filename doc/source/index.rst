@@ -54,6 +54,7 @@ Overview and Concepts
     overview_container_sync
     overview_expiring_objects
     cors
+    crossdomain
     associated_projects
 
 Developer Documentation
@@ -74,7 +75,9 @@ Administrator Documentation
     
     howto_installmultinode
     deployment_guide
+    apache_deployment_guide
     admin_guide
+    replication_network
 
 Source Documentation
 ====================

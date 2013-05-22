@@ -18,27 +18,27 @@
 import cPickle as pickle
 import operator
 import os
+import mock
 import unittest
 import email
 from shutil import rmtree
 from StringIO import StringIO
-from time import gmtime, sleep, strftime, time
+from time import gmtime, strftime, time
 from tempfile import mkdtemp
 from hashlib import md5
 
 from eventlet import sleep, spawn, wsgi, listen, Timeout
 from test.unit import FakeLogger
-from test.unit import _getxattr as getxattr
 from test.unit import _setxattr as setxattr
 from test.unit import connect_tcp, readuntil2crlfs
-from swift.obj import server as object_server, replicator
+from swift.obj import server as object_server
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
                                NullLogger, storage_directory
 from swift.common.exceptions import DiskFileNotExist
 from swift.common import constraints
 from eventlet import tpool
-from swift.common.swob import Request
+from swift.common.swob import Request, HeaderKeyDict
 
 
 class TestDiskFile(unittest.TestCase):
@@ -154,7 +154,6 @@ class TestDiskFile(unittest.TestCase):
             hook_call_count[0] += 1
 
         df = self._get_data_file(fsize=65, csize=8, iter_hook=hook)
-        print repr(df.__dict__)
         for _ in df:
             pass
 
@@ -226,7 +225,7 @@ class TestDiskFile(unittest.TestCase):
                 'X-Timestamp': timestamp,
                 'Content-Length': str(os.fstat(fd).st_size),
             }
-            df.put(fd, metadata, extension=extension)
+            df.put(fd, fsize, metadata, extension=extension)
             if invalid_type == 'ETag':
                 etag = md5()
                 etag.update('1' + '0' * (fsize - 1))
@@ -663,6 +662,24 @@ class TestObjectController(unittest.TestCase):
         resp = self.object_controller.PUT(req)
         self.assertEquals(resp.status_int, 411)
 
+    def test_PUT_zero_content_length(self):
+        req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                headers={'X-Timestamp': normalize_timestamp(time()),
+                         'Content-Type': 'application/octet-stream'})
+        req.body = ''
+        self.assertEquals(req.headers['Content-Length'], '0')
+        resp = self.object_controller.PUT(req)
+        self.assertEquals(resp.status_int, 201)
+
+    def test_PUT_zero_content_length_mismatched(self):
+        req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                headers={'X-Timestamp': normalize_timestamp(time()),
+                         'Content-Type': 'application/octet-stream'})
+        req.body = 'VERIFY'
+        req.headers['Content-Length'] = '0'
+        resp = self.object_controller.PUT(req)
+        self.assertEquals(resp.status_int, 499)
+
     def test_PUT_common(self):
         timestamp = normalize_timestamp(time())
         req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
@@ -678,8 +695,7 @@ class TestObjectController(unittest.TestCase):
             timestamp + '.data')
         self.assert_(os.path.isfile(objfile))
         self.assertEquals(open(objfile).read(), 'VERIFY')
-        self.assertEquals(pickle.loads(getxattr(objfile,
-                            object_server.METADATA_KEY)),
+        self.assertEquals(object_server.read_metadata(objfile),
                           {'X-Timestamp': timestamp,
                            'Content-Length': '6',
                            'ETag': '0b4c12d7e0a73840c1c4f148fda3b037',
@@ -709,8 +725,7 @@ class TestObjectController(unittest.TestCase):
             timestamp + '.data')
         self.assert_(os.path.isfile(objfile))
         self.assertEquals(open(objfile).read(), 'VERIFY TWO')
-        self.assertEquals(pickle.loads(getxattr(objfile,
-                            object_server.METADATA_KEY)),
+        self.assertEquals(object_server.read_metadata(objfile),
                           {'X-Timestamp': timestamp,
                            'Content-Length': '10',
                            'ETag': 'b381a4c5dab1eaa1eb9711fa647cd039',
@@ -752,8 +767,7 @@ class TestObjectController(unittest.TestCase):
             timestamp + '.data')
         self.assert_(os.path.isfile(objfile))
         self.assertEquals(open(objfile).read(), 'VERIFY THREE')
-        self.assertEquals(pickle.loads(getxattr(objfile,
-        object_server.METADATA_KEY)),
+        self.assertEquals(object_server.read_metadata(objfile),
                           {'X-Timestamp': timestamp,
                            'Content-Length': '12',
                            'ETag': 'b114ab7b90d9ccac4bd5d99cc7ebb568',
@@ -1420,8 +1434,66 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(errbuf.getvalue(), '')
         self.assertEquals(outbuf.getvalue()[:4], '405 ')
 
+        def my_check(*args):
+            return False
+        def my_storage_directory(*args):
+            return self.testdir+'/collide'
+        _storage_directory = object_server.storage_directory
+        _check = object_server.check_object_creation
+        try:
+            object_server.storage_directory = my_storage_directory
+            object_server.check_object_creation = my_check
+            inbuf = StringIO()
+            errbuf = StringIO()
+            outbuf = StringIO()
+            self.object_controller.__call__({'REQUEST_METHOD': 'PUT',
+                                             'SCRIPT_NAME': '',
+                                             'PATH_INFO': '/sda1/p/a/c/o',
+                                             'SERVER_NAME': '127.0.0.1',
+                                             'SERVER_PORT': '8080',
+                                             'SERVER_PROTOCOL': 'HTTP/1.0',
+                                             'CONTENT_LENGTH': '0',
+                                             'CONTENT_TYPE': 'text/html',
+                                             'HTTP_X_TIMESTAMP': 1.2,
+                                             'wsgi.version': (1, 0),
+                                             'wsgi.url_scheme': 'http',
+                                             'wsgi.input': inbuf,
+                                             'wsgi.errors': errbuf,
+                                             'wsgi.multithread': False,
+                                             'wsgi.multiprocess': False,
+                                             'wsgi.run_once': False},
+                                           start_response)
+            self.assertEquals(errbuf.getvalue(), '')
+            self.assertEquals(outbuf.getvalue()[:4], '201 ')
+
+            inbuf = StringIO()
+            errbuf = StringIO()
+            outbuf = StringIO()
+            self.object_controller.__call__({'REQUEST_METHOD': 'PUT',
+                                             'SCRIPT_NAME': '',
+                                             'PATH_INFO': '/sda1/q/b/d/x',
+                                             'SERVER_NAME': '127.0.0.1',
+                                             'SERVER_PORT': '8080',
+                                             'SERVER_PROTOCOL': 'HTTP/1.0',
+                                             'CONTENT_LENGTH': '0',
+                                             'CONTENT_TYPE': 'text/html',
+                                             'HTTP_X_TIMESTAMP': 1.3,
+                                             'wsgi.version': (1, 0),
+                                             'wsgi.url_scheme': 'http',
+                                             'wsgi.input': inbuf,
+                                             'wsgi.errors': errbuf,
+                                             'wsgi.multithread': False,
+                                             'wsgi.multiprocess': False,
+                                             'wsgi.run_once': False},
+                                           start_response)
+            self.assertEquals(errbuf.getvalue(), '')
+            self.assertEquals(outbuf.getvalue()[:4], '403 ')
+
+        finally:
+            object_server.storage_directory = _storage_directory
+            object_server.check_object_creation = _check
+
     def test_invalid_method_doesnt_exist(self):
-        inbuf = StringIO()
         errbuf = StringIO()
         outbuf = StringIO()
         def start_response(*args):
@@ -1433,7 +1505,6 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(outbuf.getvalue()[:4], '405 ')
 
     def test_invalid_method_is_not_public(self):
-        inbuf = StringIO()
         errbuf = StringIO()
         outbuf = StringIO()
         def start_response(*args):
@@ -1591,8 +1662,8 @@ class TestObjectController(unittest.TestCase):
             storage_directory(object_server.DATADIR, 'p', hash_path('a', 'c',
             'o')), timestamp + '.data')
         self.assert_(os.path.isfile(objfile))
-        self.assertEquals(pickle.loads(getxattr(objfile,
-            object_server.METADATA_KEY)), {'X-Timestamp': timestamp,
+        self.assertEquals(object_server.read_metadata(objfile),
+            {'X-Timestamp': timestamp,
             'Content-Length': '0', 'Content-Type': 'text/plain', 'name':
             '/a/c/o', 'X-Object-Manifest': 'c/o/', 'ETag':
             'd41d8cd98f00b204e9800998ecf8427e'})
@@ -1635,7 +1706,8 @@ class TestObjectController(unittest.TestCase):
         finally:
             object_server.http_connect = orig_http_connect
         self.assertEquals(given_args, ['127.0.0.1', '1234', 'sdc1', 1, 'PUT',
-            '/a/c/o', {'x-timestamp': '1', 'x-out': 'set'}])
+            '/a/c/o', {'x-timestamp': '1', 'x-out': 'set',
+                       'user-agent': 'obj-server %s' % os.getpid()}])
 
 
     def test_updating_multiple_delete_at_container_servers(self):
@@ -1701,11 +1773,13 @@ class TestObjectController(unittest.TestCase):
              'partition': '20',
              'method': 'PUT',
              'ssl': False,
-             'headers': {'x-content-type': 'application/burrito',
+             'headers': HeaderKeyDict({'x-content-type': 'application/burrito',
                          'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
                          'x-size': '0',
                          'x-timestamp': '12345',
-                         'x-trans-id': '-'}})
+                         'referer': 'PUT http://localhost/sda1/p/a/c/o',
+                         'user-agent': 'obj-server %d' % os.getpid(),
+                         'x-trans-id': '-'})})
         self.assertEquals(
             http_connect_args[1],
             {'ipaddr': '10.1.1.1',
@@ -1715,11 +1789,13 @@ class TestObjectController(unittest.TestCase):
              'partition': '6237',
              'method': 'PUT',
              'ssl': False,
-             'headers': {'x-content-type': 'text/plain',
+             'headers': HeaderKeyDict({'x-content-type': 'text/plain',
                          'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
                          'x-size': '0',
                          'x-timestamp': '12345',
-                         'x-trans-id': '-'}})
+                         'referer': 'PUT http://localhost/sda1/p/a/c/o',
+                         'user-agent': 'obj-server %d' % os.getpid(),
+                         'x-trans-id': '-'})})
         self.assertEquals(
             http_connect_args[2],
             {'ipaddr': '10.2.2.2',
@@ -1729,11 +1805,13 @@ class TestObjectController(unittest.TestCase):
              'partition': '6237',
              'method': 'PUT',
              'ssl': False,
-             'headers': {'x-content-type': 'text/plain',
+             'headers': HeaderKeyDict({'x-content-type': 'text/plain',
                          'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
                          'x-size': '0',
                          'x-timestamp': '12345',
-                         'x-trans-id': '-'}})
+                         'referer': 'PUT http://localhost/sda1/p/a/c/o',
+                         'user-agent': 'obj-server %d' % os.getpid(),
+                         'x-trans-id': '-'})})
 
     def test_updating_multiple_container_servers(self):
         http_connect_args = []
@@ -1788,11 +1866,13 @@ class TestObjectController(unittest.TestCase):
              'partition': '20',
              'method': 'PUT',
              'ssl': False,
-             'headers': {'x-content-type': 'application/burrito',
+             'headers': HeaderKeyDict({'x-content-type': 'application/burrito',
                          'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
                          'x-size': '0',
                          'x-timestamp': '12345',
-                         'x-trans-id': '-'}})
+                         'referer': 'PUT http://localhost/sda1/p/a/c/o',
+                         'user-agent': 'obj-server %d' % os.getpid(),
+                         'x-trans-id': '-'})})
         self.assertEquals(
             http_connect_args[1],
             {'ipaddr': '6.7.8.9',
@@ -1802,11 +1882,13 @@ class TestObjectController(unittest.TestCase):
              'partition': '20',
              'method': 'PUT',
              'ssl': False,
-             'headers': {'x-content-type': 'application/burrito',
+             'headers': HeaderKeyDict({'x-content-type': 'application/burrito',
                          'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
                          'x-size': '0',
                          'x-timestamp': '12345',
-                         'x-trans-id': '-'}})
+                         'referer': 'PUT http://localhost/sda1/p/a/c/o',
+                         'user-agent': 'obj-server %d' % os.getpid(),
+                         'x-trans-id': '-'})})
 
     def test_async_update_saves_on_exception(self):
         _prefix = utils.HASH_PATH_PREFIX
@@ -1828,8 +1910,9 @@ class TestObjectController(unittest.TestCase):
             pickle.load(open(os.path.join(self.testdir, 'sda1',
                 'async_pending', 'a83',
                 '06fbf0b514e5199dfc4e00f42eb5ea83-0000000001.00000'))),
-            {'headers': {'x-timestamp': '1', 'x-out': 'set'}, 'account': 'a',
-             'container': 'c', 'obj': 'o', 'op': 'PUT'})
+            {'headers': {'x-timestamp': '1', 'x-out': 'set',
+                         'user-agent': 'obj-server %s' % os.getpid()},
+             'account': 'a', 'container': 'c', 'obj': 'o', 'op': 'PUT'})
 
     def test_async_update_saves_on_non_2xx(self):
         _prefix = utils.HASH_PATH_PREFIX
@@ -1861,7 +1944,8 @@ class TestObjectController(unittest.TestCase):
                     pickle.load(open(os.path.join(self.testdir, 'sda1',
                         'async_pending', 'a83',
                         '06fbf0b514e5199dfc4e00f42eb5ea83-0000000001.00000'))),
-                    {'headers': {'x-timestamp': '1', 'x-out': str(status)},
+                    {'headers': {'x-timestamp': '1', 'x-out': str(status),
+                                 'user-agent': 'obj-server %s' % os.getpid()},
                      'account': 'a', 'container': 'c', 'obj': 'o',
                      'op': 'PUT'})
         finally:
@@ -1899,6 +1983,46 @@ class TestObjectController(unittest.TestCase):
         finally:
             object_server.http_connect = orig_http_connect
 
+    def test_container_update_no_async_update(self):
+        given_args = []
+
+        def fake_async_update(*args):
+            given_args.extend(args)
+
+        self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '1234'})
+        self.object_controller.container_update('PUT', 'a', 'c', 'o', req,
+            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+             'x-content-type': 'text/plain', 'x-timestamp': '1'}, 'sda1')
+        self.assertEquals(given_args, [])
+
+    def test_container_update(self):
+        given_args = []
+
+        def fake_async_update(*args):
+            given_args.extend(args)
+
+        self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '123',
+                     'X-Container-Host': 'chost',
+                     'X-Container-Partition': 'cpartition',
+                     'X-Container-Device': 'cdevice'})
+        self.object_controller.container_update('PUT', 'a', 'c', 'o', req,
+            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+             'x-content-type': 'text/plain', 'x-timestamp': '1'}, 'sda1')
+        self.assertEquals(given_args, ['PUT', 'a', 'c', 'o', 'chost',
+            'cpartition', 'cdevice',
+            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+             'x-content-type': 'text/plain', 'x-timestamp': '1',
+             'x-trans-id': '123', 'referer': 'PUT http://localhost/v1/a/c/o'},
+            'sda1'])
+
     def test_delete_at_update_put(self):
         given_args = []
 
@@ -1906,13 +2030,18 @@ class TestObjectController(unittest.TestCase):
             given_args.extend(args)
 
         self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '123'})
         self.object_controller.delete_at_update('PUT', 2, 'a', 'c', 'o',
-            {'x-timestamp': '1'}, 'sda1')
+            req, 'sda1')
         self.assertEquals(given_args, ['PUT', '.expiring_objects', '0',
             '2-a/c/o', None, None, None,
-            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+            HeaderKeyDict({'x-size': '0',
+             'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
              'x-content-type': 'text/plain', 'x-timestamp': '1',
-             'x-trans-id': '-'},
+             'x-trans-id': '123', 'referer': 'PUT http://localhost/v1/a/c/o'}),
             'sda1'])
 
     def test_delete_at_negative(self):
@@ -1923,13 +2052,18 @@ class TestObjectController(unittest.TestCase):
             given_args.extend(args)
 
         self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '1234'})
         self.object_controller.delete_at_update(
-            'PUT', -2, 'a', 'c', 'o', {'x-timestamp': '1'}, 'sda1')
+            'PUT', -2, 'a', 'c', 'o', req, 'sda1')
         self.assertEquals(given_args, [
             'PUT', '.expiring_objects', '0', '0-a/c/o', None, None, None,
-            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+            HeaderKeyDict({'x-size': '0',
+             'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
              'x-content-type': 'text/plain', 'x-timestamp': '1',
-             'x-trans-id': '-'},
+             'x-trans-id': '1234', 'referer': 'PUT http://localhost/v1/a/c/o'}),
             'sda1'])
 
     def test_delete_at_cap(self):
@@ -1940,14 +2074,19 @@ class TestObjectController(unittest.TestCase):
             given_args.extend(args)
 
         self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '1234'})
         self.object_controller.delete_at_update(
-            'PUT', 12345678901, 'a', 'c', 'o', {'x-timestamp': '1'}, 'sda1')
+            'PUT', 12345678901, 'a', 'c', 'o', req, 'sda1')
         self.assertEquals(given_args, [
             'PUT', '.expiring_objects', '9999936000', '9999999999-a/c/o', None,
             None, None,
-            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+            HeaderKeyDict({'x-size': '0',
+             'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
              'x-content-type': 'text/plain', 'x-timestamp': '1',
-             'x-trans-id': '-'},
+             'x-trans-id': '1234', 'referer': 'PUT http://localhost/v1/a/c/o'}),
             'sda1'])
 
     def test_delete_at_update_put_with_info(self):
@@ -1957,15 +2096,21 @@ class TestObjectController(unittest.TestCase):
             given_args.extend(args)
 
         self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '1234',
+                     'X-Delete-At-Host': '127.0.0.1:1234',
+                     'X-Delete-At-Partition': '3',
+                     'X-Delete-At-Device': 'sdc1'})
         self.object_controller.delete_at_update('PUT', 2, 'a', 'c', 'o',
-            {'x-timestamp': '1', 'X-Delete-At-Host': '127.0.0.1:1234',
-             'X-Delete-At-Partition': '3', 'X-Delete-At-Device': 'sdc1'},
-            'sda1')
+                                                req, 'sda1')
         self.assertEquals(given_args, ['PUT', '.expiring_objects', '0',
             '2-a/c/o', '127.0.0.1:1234', '3', 'sdc1',
-            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+            HeaderKeyDict({'x-size': '0',
+             'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
              'x-content-type': 'text/plain', 'x-timestamp': '1',
-             'x-trans-id': '-'},
+             'x-trans-id': '1234', 'referer': 'PUT http://localhost/v1/a/c/o'}),
             'sda1'])
 
     def test_delete_at_update_delete(self):
@@ -1975,11 +2120,16 @@ class TestObjectController(unittest.TestCase):
             given_args.extend(args)
 
         self.object_controller.async_update = fake_async_update
+        req = Request.blank('/v1/a/c/o',
+            environ={'REQUEST_METHOD': 'DELETE'},
+            headers={'X-Timestamp': 1,
+                     'X-Trans-Id': '1234'})
         self.object_controller.delete_at_update('DELETE', 2, 'a', 'c', 'o',
-            {'x-timestamp': '1'}, 'sda1')
+                                                req, 'sda1')
         self.assertEquals(given_args, ['DELETE', '.expiring_objects', '0',
             '2-a/c/o', None, None, None,
-            {'x-timestamp': '1', 'x-trans-id': '-'}, 'sda1'])
+            HeaderKeyDict({'x-timestamp': '1', 'x-trans-id': '1234',
+             'referer': 'DELETE http://localhost/v1/a/c/o'}), 'sda1'])
 
     def test_POST_calls_delete_at(self):
         given_args = []
@@ -2019,11 +2169,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 202)
         self.assertEquals(given_args, [
             'PUT', int(delete_at_timestamp1), 'a', 'c', 'o',
-            {'X-Delete-At': delete_at_timestamp1,
-             'Content-Type': 'application/x-test',
-             'X-Timestamp': timestamp1,
-             'Host': 'localhost:80'},
-            'sda1'])
+            req, 'sda1'])
 
         while given_args:
             given_args.pop()
@@ -2040,18 +2186,9 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 202)
         self.assertEquals(given_args, [
             'PUT', int(delete_at_timestamp2), 'a', 'c', 'o',
-            {'X-Delete-At': delete_at_timestamp2,
-             'Content-Type': 'application/x-test',
-             'X-Timestamp': timestamp2, 'Host': 'localhost:80'},
-            'sda1',
+            req, 'sda1',
             'DELETE', int(delete_at_timestamp1), 'a', 'c', 'o',
-            # This 2 timestamp is okay because it's ignored since it's just
-            # part of the current request headers. The above 1 timestamp is the
-            # important one.
-            {'X-Delete-At': delete_at_timestamp2,
-             'Content-Type': 'application/x-test',
-             'X-Timestamp': timestamp2, 'Host': 'localhost:80'},
-            'sda1'])
+            req, 'sda1'])
 
     def test_PUT_calls_delete_at(self):
         given_args = []
@@ -2083,12 +2220,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 201)
         self.assertEquals(given_args, [
             'PUT', int(delete_at_timestamp1), 'a', 'c', 'o',
-            {'X-Delete-At': delete_at_timestamp1,
-             'Content-Length': '4',
-             'Content-Type': 'application/octet-stream',
-             'X-Timestamp': timestamp1,
-             'Host': 'localhost:80'},
-            'sda1'])
+            req, 'sda1'])
 
         while given_args:
             given_args.pop()
@@ -2107,20 +2239,9 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 201)
         self.assertEquals(given_args, [
             'PUT', int(delete_at_timestamp2), 'a', 'c', 'o',
-            {'X-Delete-At': delete_at_timestamp2,
-             'Content-Length': '4',
-             'Content-Type': 'application/octet-stream',
-             'X-Timestamp': timestamp2, 'Host': 'localhost:80'},
-            'sda1',
+            req, 'sda1',
             'DELETE', int(delete_at_timestamp1), 'a', 'c', 'o',
-            # This 2 timestamp is okay because it's ignored since it's just
-            # part of the current request headers. The above 1 timestamp is the
-            # important one.
-            {'X-Delete-At': delete_at_timestamp2,
-             'Content-Length': '4',
-             'Content-Type': 'application/octet-stream',
-             'X-Timestamp': timestamp2, 'Host': 'localhost:80'},
-            'sda1'])
+            req, 'sda1'])
 
     def test_GET_but_expired(self):
         test_time = time() + 10000
@@ -2364,12 +2485,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 201)
         self.assertEquals(given_args, [
             'PUT', int(delete_at_timestamp1), 'a', 'c', 'o',
-            {'X-Delete-At': delete_at_timestamp1,
-             'Content-Length': '4',
-             'Content-Type': 'application/octet-stream',
-             'X-Timestamp': timestamp1,
-             'Host': 'localhost:80'},
-            'sda1'])
+            req, 'sda1'])
 
         while given_args:
             given_args.pop()
@@ -2384,9 +2500,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.status_int, 204)
         self.assertEquals(given_args, [
             'DELETE', int(delete_at_timestamp1), 'a', 'c', 'o',
-            {'Content-Type': 'application/octet-stream',
-             'Host': 'localhost:80', 'X-Timestamp': timestamp2},
-            'sda1'])
+            req, 'sda1'])
 
     def test_PUT_delete_at_in_past(self):
         req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
@@ -2494,6 +2608,125 @@ class TestObjectController(unittest.TestCase):
             self.assertFalse(body_reader.read_called)
         finally:
             object_server.fallocate = orig_fallocate
+
+    def test_serv_reserv(self):
+        """
+        Test replication_server flag
+        was set from configuration file.
+        """
+        conf = {'devices': self.testdir, 'mount_check': 'false'}
+        self.assertEquals(
+            object_server.ObjectController(conf).replication_server, None)
+        for val in [True, '1', 'True', 'true']:
+            conf['replication_server'] = val
+            self.assertTrue(
+                object_server.ObjectController(conf).replication_server)
+        for val in [False, 0, '0', 'False', 'false', 'test_string']:
+            conf['replication_server'] = val
+            self.assertFalse(
+                object_server.ObjectController(conf).replication_server)
+
+    def test_list_allowed_methods(self):
+        """ Test list of allowed_methods """
+        methods = ['DELETE', 'PUT', 'HEAD', 'GET', 'REPLICATE', 'POST']
+        self.assertEquals(self.object_controller.allowed_methods, methods)
+
+    def test_allowed_methods_from_configuration_file(self):
+        """
+        Test list of allowed_methods which
+        were set from configuration file.
+        """
+        conf = {'devices': self.testdir, 'mount_check': 'false'}
+        self.assertEquals(object_server.ObjectController(conf).allowed_methods,
+                          ['DELETE', 'PUT', 'HEAD', 'GET', 'REPLICATE',
+                           'POST'])
+        conf['replication_server'] = 'True'
+        self.assertEquals(object_server.ObjectController(conf).allowed_methods,
+                          ['REPLICATE'])
+        conf['replication_server'] = 'False'
+        self.assertEquals(object_server.ObjectController(conf).allowed_methods,
+                          ['DELETE', 'PUT', 'HEAD', 'GET', 'POST'])
+
+    def test_correct_allowed_method(self):
+        """
+        Test correct work for allowed method using
+        swift.object_server.ObjectController.__call__
+        """
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+
+        def start_response(*args):
+            """ Sends args to outbuf """
+            outbuf.writelines(args)
+
+        method = self.object_controller.allowed_methods[0]
+
+        env = {'REQUEST_METHOD': method,
+               'SCRIPT_NAME': '',
+               'PATH_INFO': '/sda1/p/a/c',
+               'SERVER_NAME': '127.0.0.1',
+               'SERVER_PORT': '8080',
+               'SERVER_PROTOCOL': 'HTTP/1.0',
+               'CONTENT_LENGTH': '0',
+               'wsgi.version': (1, 0),
+               'wsgi.url_scheme': 'http',
+               'wsgi.input': inbuf,
+               'wsgi.errors': errbuf,
+               'wsgi.multithread': False,
+               'wsgi.multiprocess': False,
+               'wsgi.run_once': False}
+
+        answer = ['<html><h1>Method Not Allowed</h1><p>The method is not '
+                  'allowed for this resource.</p></html>']
+
+        with mock.patch.object(self.object_controller, method,
+                               return_value=mock.MagicMock()) as mock_method:
+            response = self.object_controller.__call__(env, start_response)
+            self.assertNotEqual(response, answer)
+            self.assertEqual(mock_method.call_count, 1)
+
+    def test_not_allowed_method(self):
+        """
+        Test correct work for NOT allowed method using
+        swift.object_server.ObjectController.__call__
+        """
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+
+        def start_response(*args):
+            """ Sends args to outbuf """
+            outbuf.writelines(args)
+
+        method = self.object_controller.allowed_methods[0]
+
+        env = {'REQUEST_METHOD': method,
+               'SCRIPT_NAME': '',
+               'PATH_INFO': '/sda1/p/a/c',
+               'SERVER_NAME': '127.0.0.1',
+               'SERVER_PORT': '8080',
+               'SERVER_PROTOCOL': 'HTTP/1.0',
+               'CONTENT_LENGTH': '0',
+               'wsgi.version': (1, 0),
+               'wsgi.url_scheme': 'http',
+               'wsgi.input': inbuf,
+               'wsgi.errors': errbuf,
+               'wsgi.multithread': False,
+               'wsgi.multiprocess': False,
+               'wsgi.run_once': False}
+
+        answer = ['<html><h1>Method Not Allowed</h1><p>The method is not '
+                  'allowed for this resource.</p></html>']
+
+        with mock.patch.object(self.object_controller, method,
+                               return_value=mock.MagicMock()) as mock_method:
+            self.object_controller.allowed_methods.remove(method)
+            response = self.object_controller.__call__(env, start_response)
+            self.assertEqual(mock_method.call_count, 0)
+            self.assertEqual(response, answer)
+            self.object_controller.allowed_methods.append(method)
+
 
 if __name__ == '__main__':
     unittest.main()

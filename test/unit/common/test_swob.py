@@ -102,6 +102,15 @@ class TestHeaderKeyDict(unittest.TestCase):
         self.assertEquals(headers.get('something-else'), None)
         self.assertEquals(headers.get('something-else', True), True)
 
+    def test_keys(self):
+        headers = swift.common.swob.HeaderKeyDict()
+        headers['content-length'] = 20
+        headers['cOnTent-tYpe'] = 'text/plain'
+        headers['SomeThing-eLse'] = 'somevalue'
+        self.assertEquals(
+            set(headers.keys()),
+            set(('Content-Length', 'Content-Type', 'Something-Else')))
+
 
 class TestRange(unittest.TestCase):
     def test_range(self):
@@ -502,6 +511,61 @@ class TestRequest(unittest.TestCase):
         req.query_string = u'x=\u2661'
         self.assertEquals(req.params['x'], u'\u2661'.encode('utf-8'))
 
+    def test_url(self):
+        pi = '/hi/there'
+        path = pi
+        req = swift.common.swob.Request.blank(path)
+        sche = 'http'
+        exp_url = '%(sche)s://localhost%(pi)s' % locals()
+        self.assertEqual(req.url, exp_url)
+
+        qs = 'hello=equal&acl'
+        path = '%s?%s' % (pi, qs)
+        s, p = 'unit.test.example.com', '90'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'SERVER_NAME': s,
+                                         'SERVER_PORT': p})
+        exp_url = '%(sche)s://%(s)s:%(p)s%(pi)s?%(qs)s' % locals()
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host + ':80'})
+        exp_url = '%(sche)s://%(host)s%(pi)s?%(qs)s' % locals()
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com'
+        sche = 'https'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host + ':443',
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%(sche)s://%(host)s%(pi)s?%(qs)s' % locals()
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com:81'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host,
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%(sche)s://%(host)s%(pi)s?%(qs)s' % locals()
+        self.assertEqual(req.url, exp_url)
+
+    def test_as_referer(self):
+        pi = '/hi/there'
+        qs = 'hello=equal&acl'
+        sche = 'https'
+        host = 'unit.test.example.com:81'
+        req = swift.common.swob.Request({'REQUEST_METHOD': 'POST',
+                                         'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host,
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%(sche)s://%(host)s%(pi)s?%(qs)s' % locals()
+        self.assertEqual(req.as_referer(), 'POST ' + exp_url)
+
 
 class TestStatusMap(unittest.TestCase):
     def test_status_map(self):
@@ -518,8 +582,8 @@ class TestStatusMap(unittest.TestCase):
         self.assert_('The resource could not be found.' in body)
         self.assertEquals(response_args[0], '404 Not Found')
         headers = dict(response_args[1])
-        self.assertEquals(headers['content-type'], 'text/html; charset=UTF-8')
-        self.assert_(int(headers['content-length']) > 0)
+        self.assertEquals(headers['Content-Type'], 'text/html; charset=UTF-8')
+        self.assert_(int(headers['Content-Length']) > 0)
 
 
 class TestResponse(unittest.TestCase):
@@ -580,14 +644,16 @@ class TestResponse(unittest.TestCase):
             '/', environ={'HTTP_HOST': 'somehost'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost/something')
 
         req = swift.common.swob.Request.blank(
             '/', environ={'HTTP_HOST': 'somehost:80'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost/something')
 
         req = swift.common.swob.Request.blank(
@@ -595,7 +661,8 @@ class TestResponse(unittest.TestCase):
                           'wsgi.url_scheme': 'http'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost:443/something')
 
         req = swift.common.swob.Request.blank(
@@ -603,7 +670,8 @@ class TestResponse(unittest.TestCase):
                           'wsgi.url_scheme': 'https'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'https://somehost/something')
 
     def test_location_rewrite_no_host(self):
@@ -614,7 +682,8 @@ class TestResponse(unittest.TestCase):
         del req.environ['HTTP_HOST']
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://local/something')
 
         req = swift.common.swob.Request.blank(
@@ -622,7 +691,8 @@ class TestResponse(unittest.TestCase):
         del req.environ['HTTP_HOST']
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://local:81/something')
 
     def test_location_no_rewrite(self):
@@ -632,7 +702,8 @@ class TestResponse(unittest.TestCase):
             '/', environ={'HTTP_HOST': 'somehost'})
         resp = self._get_response()
         resp.location = 'http://www.google.com/'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://www.google.com/')
 
     def test_app_iter(self):
@@ -655,7 +726,8 @@ class TestResponse(unittest.TestCase):
         resp.conditional_response = True
         resp.content_length = 10
 
-        content = ''.join(resp._response_iter(resp.app_iter, ''))
+        # read response
+        ''.join(resp._response_iter(resp.app_iter, ''))
 
         self.assertEquals(resp.status, '200 OK')
         self.assertEqual(10, resp.content_length)
@@ -672,7 +744,8 @@ class TestResponse(unittest.TestCase):
         resp.conditional_response = True
         resp.content_length = 10
 
-        content = ''.join(resp._response_iter(resp.app_iter, ''))
+        # read response
+        ''.join(resp._response_iter(resp.app_iter, ''))
 
         self.assertEquals(resp.status, '200 OK')
         self.assertEqual(10, resp.content_length)

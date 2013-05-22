@@ -29,9 +29,10 @@ from urllib import unquote
 
 from swift.common.utils import normalize_timestamp, public
 from swift.common.constraints import check_metadata, MAX_ACCOUNT_NAME_LENGTH
-from swift.common.http import is_success, HTTP_NOT_FOUND
+from swift.common.http import HTTP_NOT_FOUND
 from swift.proxy.controllers.base import Controller, get_account_memcache_key
-from swift.common.swob import HTTPBadRequest, HTTPMethodNotAllowed, Request
+from swift.common.swob import HTTPBadRequest, HTTPMethodNotAllowed, \
+    HTTPNoContent
 
 
 class AccountController(Controller):
@@ -47,31 +48,26 @@ class AccountController(Controller):
 
     def GETorHEAD(self, req):
         """Handler for HTTP GET/HEAD requests."""
+        if len(self.account_name) > MAX_ACCOUNT_NAME_LENGTH:
+            resp = HTTPBadRequest(request=req)
+            resp.body = 'Account name length of %d longer than %d' % \
+                        (len(self.account_name), MAX_ACCOUNT_NAME_LENGTH)
+            return resp
+
         partition, nodes = self.app.account_ring.get_nodes(self.account_name)
-        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
-            req, _('Account'), partition, nodes, req.path_info.rstrip('/'),
-            len(nodes))
+            req, _('Account'), self.app.account_ring, partition,
+            req.path_info.rstrip('/'))
         if resp.status_int == HTTP_NOT_FOUND and self.app.account_autocreate:
-            if len(self.account_name) > MAX_ACCOUNT_NAME_LENGTH:
-                resp = HTTPBadRequest(request=req)
-                resp.body = 'Account name length of %d longer than %d' % \
-                            (len(self.account_name), MAX_ACCOUNT_NAME_LENGTH)
-                return resp
-            headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                       'X-Trans-Id': self.trans_id,
-                       'Connection': 'close'}
-            resp = self.make_requests(
-                Request.blank('/v1/' + self.account_name),
-                self.app.account_ring, partition, 'PUT',
-                '/' + self.account_name, [headers] * len(nodes))
-            if not is_success(resp.status_int):
-                self.app.logger.warning('Could not autocreate account %r' %
-                                        self.account_name)
-                return resp
-            resp = self.GETorHEAD_base(
-                req, _('Account'), partition, nodes, req.path_info.rstrip('/'),
-                len(nodes))
+            # Fake a response
+            headers = {'Content-Length': '0',
+                       'Accept-Ranges': 'bytes',
+                       'Content-Type': 'text/plain; charset=utf-8',
+                       'X-Timestamp': normalize_timestamp(time.time()),
+                       'X-Account-Bytes-Used': '0',
+                       'X-Account-Container-Count': '0',
+                       'X-Account-Object-Count': '0'}
+            resp = HTTPNoContent(request=req, headers=headers)
         return resp
 
     @public
@@ -91,10 +87,7 @@ class AccountController(Controller):
             return resp
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
-        headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                   'x-trans-id': self.trans_id,
-                   'Connection': 'close'}
-        self.transfer_headers(req.headers, headers)
+        headers = self.generate_request_headers(req, transfer=True)
         if self.app.memcache:
             self.app.memcache.delete(
                 get_account_memcache_key(self.account_name))
@@ -106,15 +99,17 @@ class AccountController(Controller):
     @public
     def POST(self, req):
         """HTTP POST request handler."""
+        if len(self.account_name) > MAX_ACCOUNT_NAME_LENGTH:
+            resp = HTTPBadRequest(request=req)
+            resp.body = 'Account name length of %d longer than %d' % \
+                        (len(self.account_name), MAX_ACCOUNT_NAME_LENGTH)
+            return resp
         error_response = check_metadata(req, 'account')
         if error_response:
             return error_response
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
-        headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                   'X-Trans-Id': self.trans_id,
-                   'Connection': 'close'}
-        self.transfer_headers(req.headers, headers)
+        headers = self.generate_request_headers(req, transfer=True)
         if self.app.memcache:
             self.app.memcache.delete(
                 get_account_memcache_key(self.account_name))
@@ -122,33 +117,27 @@ class AccountController(Controller):
             req, self.app.account_ring, account_partition, 'POST',
             req.path_info, [headers] * len(accounts))
         if resp.status_int == HTTP_NOT_FOUND and self.app.account_autocreate:
-            if len(self.account_name) > MAX_ACCOUNT_NAME_LENGTH:
-                resp = HTTPBadRequest(request=req)
-                resp.body = 'Account name length of %d longer than %d' % \
-                            (len(self.account_name), MAX_ACCOUNT_NAME_LENGTH)
-                return resp
+            self.autocreate_account(self.account_name)
             resp = self.make_requests(
-                Request.blank('/v1/' + self.account_name),
-                self.app.account_ring, account_partition, 'PUT',
-                '/' + self.account_name, [headers] * len(accounts))
-            if not is_success(resp.status_int):
-                self.app.logger.warning('Could not autocreate account %r' %
-                                        self.account_name)
-                return resp
+                req, self.app.account_ring, account_partition, 'POST',
+                req.path_info, [headers] * len(accounts))
         return resp
 
     @public
     def DELETE(self, req):
         """HTTP DELETE request handler."""
+        # Extra safety in case someone typos a query string for an
+        # account-level DELETE request that was really meant to be caught by
+        # some middleware.
+        if req.query_string:
+            return HTTPBadRequest(request=req)
         if not self.app.allow_account_management:
             return HTTPMethodNotAllowed(
                 request=req,
                 headers={'Allow': ', '.join(self.allowed_methods)})
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
-        headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                   'X-Trans-Id': self.trans_id,
-                   'Connection': 'close'}
+        headers = self.generate_request_headers(req)
         if self.app.memcache:
             self.app.memcache.delete(
                 get_account_memcache_key(self.account_name))

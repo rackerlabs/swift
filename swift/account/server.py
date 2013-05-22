@@ -47,6 +47,18 @@ class AccountController(object):
         self.logger = get_logger(conf, log_route='account-server')
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
+        replication_server = conf.get('replication_server', None)
+        if replication_server is None:
+            allowed_methods = ['DELETE', 'PUT', 'HEAD', 'GET', 'REPLICATE',
+                               'POST']
+        else:
+            replication_server = config_true_value(replication_server)
+            if replication_server:
+                allowed_methods = ['REPLICATE']
+            else:
+                allowed_methods = ['DELETE', 'PUT', 'HEAD', 'GET', 'POST']
+        self.replication_server = replication_server
+        self.allowed_methods = allowed_methods
         self.replicator_rpc = ReplicatorRpc(self.root, DATADIR, AccountBroker,
                                             self.mount_check,
                                             logger=self.logger)
@@ -255,7 +267,11 @@ class AccountController(object):
             account_list = '\n'.join(output_list)
         else:
             if not account_list:
-                return HTTPNoContent(request=req, headers=resp_headers)
+                resp_headers['Content-Type'] = req.accept.best_match(
+                    ['text/plain', 'application/json',
+                     'application/xml', 'text/xml'])
+                return HTTPNoContent(request=req, headers=resp_headers,
+                                     charset='utf-8')
             account_list = '\n'.join(r[0] for r in account_list) + '\n'
         ret = Response(body=account_list, request=req, headers=resp_headers)
         ret.content_type = out_content_type
@@ -327,6 +343,8 @@ class AccountController(object):
                 try:
                     method = getattr(self, req.method)
                     getattr(method, 'publicly_accessible')
+                    if req.method not in self.allowed_methods:
+                        raise AttributeError('Not allowed method.')
                 except AttributeError:
                     res = HTTPMethodNotAllowed()
                 else:

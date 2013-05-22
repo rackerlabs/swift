@@ -27,7 +27,6 @@
 import mimetypes
 import os
 from ConfigParser import ConfigParser
-import uuid
 from random import shuffle
 from time import time
 
@@ -35,7 +34,7 @@ from eventlet import Timeout
 
 from swift.common.ring import Ring
 from swift.common.utils import cache_from_env, get_logger, \
-    get_remote_client, split_path, config_true_value
+    get_remote_client, split_path, config_true_value, generate_trans_id
 from swift.common.constraints import check_utf8
 from swift.proxy.controllers import AccountController, ObjectController, \
     ContainerController
@@ -63,6 +62,7 @@ class Application(object):
         self.put_queue_depth = int(conf.get('put_queue_depth', 10))
         self.object_chunk_size = int(conf.get('object_chunk_size', 65536))
         self.client_chunk_size = int(conf.get('client_chunk_size', 65536))
+        self.trans_id_suffix = conf.get('trans_id_suffix', '')
         self.error_suppression_interval = \
             int(conf.get('error_suppression_interval', 60))
         self.error_suppression_limit = \
@@ -115,6 +115,16 @@ class Application(object):
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
         self.allow_static_large_object = config_true_value(
             conf.get('allow_static_large_object', 'true'))
+        value = conf.get('request_node_count', '2 * replicas').lower().split()
+        if len(value) == 1:
+            value = int(value[0])
+            self.request_node_count = lambda r: value
+        elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
+            value = int(value[0])
+            self.request_node_count = lambda r: value * r.replica_count
+        else:
+            raise ValueError(
+                'Invalid request_node_count value: %r' % ''.join(value))
 
     def get_controller(self, path):
         """
@@ -210,7 +220,7 @@ class Application(object):
             controller = controller(self, **path_parts)
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
-                trans_id = 'tx' + uuid.uuid4().hex
+                trans_id = generate_trans_id(self.trans_id_suffix)
                 req.environ['swift.trans_id'] = trans_id
                 self.logger.txn_id = trans_id
             req.headers['x-trans-id'] = req.environ['swift.trans_id']

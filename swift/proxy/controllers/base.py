@@ -24,6 +24,7 @@
 #   These shenanigans are to ensure all related objects can be garbage
 # collected. We've seen objects hang around forever otherwise.
 
+import os
 import time
 import functools
 import inspect
@@ -34,15 +35,15 @@ from eventlet.timeout import Timeout
 
 from swift.common.wsgi import make_pre_authed_request
 from swift.common.utils import normalize_timestamp, config_true_value, \
-    public, split_path, cache_from_env
+    public, split_path, cache_from_env, list_from_csv, \
+    GreenthreadSafeIterator
 from swift.common.bufferedhttp import http_connect
-from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH
 from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
 from swift.common.http import is_informational, is_success, is_redirection, \
     is_server_error, HTTP_OK, HTTP_PARTIAL_CONTENT, HTTP_MULTIPLE_CHOICES, \
     HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, \
     HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED
-from swift.common.swob import Request, Response
+from swift.common.swob import Request, Response, HeaderKeyDict
 
 
 def update_headers(response, headers):
@@ -129,8 +130,6 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
         'cors': {
             'allow_origin': headers.get(
                 'x-container-meta-access-control-allow-origin'),
-            'allow_headers': headers.get(
-                'x-container-meta-access-control-allow-headers'),
             'expose_headers': headers.get(
                 'x-container-meta-access-control-expose-headers'),
             'max_age': headers.get(
@@ -180,14 +179,14 @@ def cors_validation(func):
                               'content-type', 'expires', 'last-modified',
                               'pragma', 'etag', 'x-timestamp', 'x-trans-id']
             for header in resp.headers:
-                if header.startswith('x-container-meta') or \
-                        header.startswith('x-object-meta'):
+                if header.startswith('X-Container-Meta') or \
+                        header.startswith('X-Object-Meta'):
                     expose_headers.append(header.lower())
             if cors_info.get('expose_headers'):
                 expose_headers.extend(
-                    [a.strip()
-                     for a in cors_info['expose_headers'].split(' ')
-                     if a.strip()])
+                    [header_line.strip()
+                     for header_line in cors_info['expose_headers'].split(' ')
+                     if header_line.strip()])
             resp.headers['Access-Control-Expose-Headers'] = \
                 ', '.join(expose_headers)
 
@@ -242,7 +241,7 @@ def get_account_info(env, app, swift_source=None):
     cache = cache_from_env(env)
     if not cache:
         return None
-    (version, account, container, _) = \
+    (version, account, _junk, _junk) = \
         split_path(env['PATH_INFO'], 2, 4, True)
     cache_key = get_account_memcache_key(account)
     # Use a unique environment cache key per account.  If you copy this env
@@ -278,31 +277,42 @@ class Controller(object):
             if getattr(m, 'publicly_accessible', False):
                 self.allowed_methods.add(name)
 
-    def transfer_headers(self, src_headers, dst_headers):
+    def _x_remove_headers(self):
+        return []
 
+    def transfer_headers(self, src_headers, dst_headers):
         st = self.server_type.lower()
+
         x_remove = 'x-remove-%s-meta-' % st
-        x_remove_read = 'x-remove-%s-read' % st
-        x_remove_write = 'x-remove-%s-write' % st
-        x_meta = 'x-%s-meta-' % st
         dst_headers.update((k.lower().replace('-remove', '', 1), '')
                            for k in src_headers
                            if k.lower().startswith(x_remove) or
-                           k.lower() in (x_remove_read, x_remove_write))
+                           k.lower() in self._x_remove_headers())
 
+        x_meta = 'x-%s-meta-' % st
         dst_headers.update((k.lower(), v)
                            for k, v in src_headers.iteritems()
                            if k.lower() in self.pass_through_headers or
                            k.lower().startswith(x_meta))
 
-    def error_increment(self, node):
-        """
-        Handles incrementing error counts when talking to nodes.
-
-        :param node: dictionary of node to increment the error count for
-        """
-        node['errors'] = node.get('errors', 0) + 1
-        node['last_error'] = time.time()
+    def generate_request_headers(self, orig_req=None, additional=None,
+                                 transfer=False):
+        # Use the additional headers first so they don't overwrite the headers
+        # we require.
+        headers = HeaderKeyDict(additional) if additional else HeaderKeyDict()
+        if transfer:
+            self.transfer_headers(orig_req.headers, headers)
+        if 'x-timestamp' not in headers:
+            headers['x-timestamp'] = normalize_timestamp(time.time())
+        if orig_req:
+            referer = orig_req.as_referer()
+        else:
+            referer = ''
+        headers.update({'x-trans-id': self.trans_id,
+                        'connection': 'close',
+                        'user-agent': 'proxy-server %s' % os.getpid(),
+                        'referer': referer})
+        return headers
 
     def error_occurred(self, node, msg):
         """
@@ -311,10 +321,11 @@ class Controller(object):
         :param node: dictionary of node to handle errors for
         :param msg: error message
         """
-        self.error_increment(node)
-        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s'),
+        node['errors'] = node.get('errors', 0) + 1
+        node['last_error'] = time.time()
+        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                               {'msg': msg, 'ip': node['ip'],
-                              'port': node['port']})
+                              'port': node['port'], 'device': node['device']})
 
     def exception_occurred(self, node, typ, additional_info):
         """
@@ -352,20 +363,30 @@ class Controller(object):
                 _('Node error limited %(ip)s:%(port)s (%(device)s)'), node)
         return limited
 
-    def error_limit(self, node):
+    def error_limit(self, node, msg):
         """
-        Mark a node as error limited.
+        Mark a node as error limited. This immediately pretends the
+        node received enough errors to trigger error suppression. Use
+        this for errors like Insufficient Storage. For other errors
+        use :func:`error_occurred`.
 
         :param node: dictionary of node to error limit
+        :param msg: error message
         """
         node['errors'] = self.app.error_suppression_limit + 1
         node['last_error'] = time.time()
+        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
+                              {'msg': msg, 'ip': node['ip'],
+                              'port': node['port'], 'device': node['device']})
 
-    def account_info(self, account, autocreate=False):
+    def account_info(self, account, req=None):
         """
         Get account information, and also verify that the account exists.
 
         :param account: name of the account to get the info for
+        :param req: caller's HTTP request context object (optional)
+        :param autocreate: whether or not to automatically create the given
+                           account or not (optional, default: False)
         :returns: tuple of (account partition, account nodes, container_count)
                   or (None, None, None) if it does not exist
         """
@@ -390,19 +411,12 @@ class Controller(object):
                     container_count = 0
             if result_code == HTTP_OK:
                 return partition, nodes, container_count
-            elif result_code == HTTP_NOT_FOUND and not autocreate:
+            elif result_code == HTTP_NOT_FOUND:
                 return None, None, None
         result_code = 0
-        attempts_left = len(nodes)
         path = '/%s' % account
-        headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
-        iternodes = self.iter_nodes(partition, nodes, self.app.account_ring)
-        while attempts_left > 0:
-            try:
-                node = iternodes.next()
-            except StopIteration:
-                break
-            attempts_left -= 1
+        headers = self.generate_request_headers(req)
+        for node in self.iter_nodes(self.app.account_ring, partition):
             try:
                 start_node_timing = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
@@ -412,7 +426,7 @@ class Controller(object):
                 self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getresponse()
-                    resp.read()
+                    body = resp.read()
                     if is_success(resp.status):
                         result_code = HTTP_OK
                         account_info.update(
@@ -424,28 +438,20 @@ class Controller(object):
                         elif result_code != HTTP_NOT_FOUND:
                             result_code = -1
                     elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
+                        self.error_limit(node, _('ERROR Insufficient Storage'))
                         continue
                     else:
                         result_code = -1
+                        if is_server_error(resp.status):
+                            self.error_occurred(
+                                node,
+                                _('ERROR %(status)d %(body)s From Account '
+                                  'Server') %
+                                {'status': resp.status, 'body': body[:1024]})
             except (Exception, Timeout):
                 self.exception_occurred(node, _('Account'),
                                         _('Trying to get account info for %s')
                                         % path)
-        if result_code == HTTP_NOT_FOUND and autocreate:
-            if len(account) > MAX_ACCOUNT_NAME_LENGTH:
-                return None, None, None
-            headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                       'X-Trans-Id': self.trans_id,
-                       'Connection': 'close'}
-            resp = self.make_requests(Request.blank('/v1' + path),
-                                      self.app.account_ring, partition, 'PUT',
-                                      path, [headers] * len(nodes))
-            if not is_success(resp.status_int):
-                self.app.logger.warning('Could not autocreate account %r' %
-                                        path)
-                return None, None, None
-            result_code = HTTP_OK
         if self.app.memcache and result_code in (HTTP_OK, HTTP_NOT_FOUND):
             if result_code == HTTP_OK:
                 cache_timeout = self.app.recheck_account_existence
@@ -463,7 +469,7 @@ class Controller(object):
             return partition, nodes, container_count
         return None, None, None
 
-    def container_info(self, account, container, account_autocreate=False):
+    def container_info(self, account, container, req=None):
         """
         Get container information and thusly verify container existence.
         This will also make a call to account_info to verify that the
@@ -471,6 +477,9 @@ class Controller(object):
 
         :param account: account name for the container
         :param container: container name to look up
+        :param req: caller's HTTP request context object (optional)
+        :param account_autocreate: whether or not to automatically create the
+                           given account or not (optional, default: False)
         :returns: dict containing at least container partition ('partition'),
                   container nodes ('containers'), container read
                   acl ('read_acl'), container write acl ('write_acl'),
@@ -495,11 +504,10 @@ class Controller(object):
                     container_info['partition'] = part
                     container_info['nodes'] = nodes
                 return container_info
-        if not self.account_info(account, autocreate=account_autocreate)[1]:
+        if not self.account_info(account, req)[1]:
             return container_info
-        attempts_left = len(nodes)
-        headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
-        for node in self.iter_nodes(part, nodes, self.app.container_ring):
+        headers = self.generate_request_headers(req)
+        for node in self.iter_nodes(self.app.container_ring, part):
             try:
                 start_node_timing = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
@@ -509,7 +517,7 @@ class Controller(object):
                 self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getresponse()
-                    resp.read()
+                    body = resp.read()
                 if is_success(resp.status):
                     container_info.update(
                         headers_to_container_info(resp.getheaders()))
@@ -519,14 +527,16 @@ class Controller(object):
                 else:
                     container_info['status'] = -1
                     if resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
+                        self.error_limit(node, _('ERROR Insufficient Storage'))
+                    elif is_server_error(resp.status):
+                        self.error_occurred(node, _(
+                            'ERROR %(status)d %(body)s From Container '
+                            'Server') %
+                            {'status': resp.status, 'body': body[:1024]})
             except (Exception, Timeout):
                 self.exception_occurred(
                     node, _('Container'),
                     _('Trying to get container info for %s') % path)
-            attempts_left -= 1
-            if attempts_left <= 0:
-                break
         if self.app.memcache:
             if container_info['status'] == HTTP_OK:
                 self.app.memcache.set(
@@ -541,18 +551,32 @@ class Controller(object):
             container_info['nodes'] = nodes
         return container_info
 
-    def iter_nodes(self, partition, nodes, ring):
+    def iter_nodes(self, ring, partition):
         """
-        Node iterator that will first iterate over the normal nodes for a
-        partition and then the handoff partitions for the node.
+        Yields nodes for a ring partition, skipping over error
+        limited nodes and stopping at the configurable number of
+        nodes. If a node yielded subsequently gets error limited, an
+        extra node will be yielded to take its place.
 
-        :param partition: partition to iterate nodes for
-        :param nodes: list of node dicts from the ring
-        :param ring: ring to get handoff nodes from
+        Note that if you're going to iterate over this concurrently from
+        multiple greenthreads, you'll want to use a
+        swift.common.utils.GreenthreadSafeIterator to serialize access.
+        Otherwise, you may get ValueErrors from concurrent access. (You also
+        may not, depending on how logging is configured, the vagaries of
+        socket IO and eventlet, and the phase of the moon.)
+
+        :param ring: ring to get yield nodes from
+        :param partition: ring partition to yield nodes for
         """
-        for node in nodes:
+        primary_nodes = self.app.sort_nodes(ring.get_part_nodes(partition))
+        nodes_left = self.app.request_node_count(ring)
+        for node in primary_nodes:
             if not self.error_limited(node):
                 yield node
+                if not self.error_limited(node):
+                    nodes_left -= 1
+                    if nodes_left <= 0:
+                        return
         handoffs = 0
         for node in ring.get_more_nodes(partition):
             if not self.error_limited(node):
@@ -561,9 +585,13 @@ class Controller(object):
                     self.app.logger.increment('handoff_count')
                     self.app.logger.warning(
                         'Handoff requested (%d)' % handoffs)
-                    if handoffs == len(nodes):
+                    if handoffs == len(primary_nodes):
                         self.app.logger.increment('handoff_all_count')
                 yield node
+                if not self.error_limited(node):
+                    nodes_left -= 1
+                    if nodes_left <= 0:
+                        return
 
     def _make_request(self, nodes, part, method, path, headers, query,
                       logger_thread_locals):
@@ -583,7 +611,7 @@ class Controller(object):
                             not is_server_error(resp.status):
                         return resp.status, resp.reason, resp.read()
                     elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
+                        self.error_limit(node, _('ERROR Insufficient Storage'))
             except (Exception, Timeout):
                 self.exception_occurred(node, self.server_type,
                                         _('Trying to %(method)s %(path)s') %
@@ -601,7 +629,7 @@ class Controller(object):
         :returns: a swob.Response object
         """
         start_nodes = ring.get_part_nodes(part)
-        nodes = self.iter_nodes(part, start_nodes, ring)
+        nodes = GreenthreadSafeIterator(self.iter_nodes(ring, part))
         pile = GreenPile(len(start_nodes))
         for head in headers:
             pile.spawn(self._make_request, nodes, part, method, path,
@@ -755,17 +783,32 @@ class Controller(object):
         """
         return is_success(src.status) or is_redirection(src.status)
 
-    def GETorHEAD_base(self, req, server_type, partition, nodes, path,
-                       attempts):
+    def autocreate_account(self, account):
+        partition, nodes = self.app.account_ring.get_nodes(account)
+        path = '/%s' % account
+        headers = {'X-Timestamp': normalize_timestamp(time.time()),
+                   'X-Trans-Id': self.trans_id,
+                   'Connection': 'close'}
+        resp = self.make_requests(Request.blank('/v1' + path),
+                                  self.app.account_ring, partition, 'PUT',
+                                  path, [headers] * len(nodes))
+        if is_success(resp.status_int):
+            self.app.logger.info('autocreate account %r' % path)
+            if self.app.memcache:
+                self.app.memcache.delete(
+                    get_account_memcache_key(account))
+        else:
+            self.app.logger.warning('Could not autocreate account %r' % path)
+
+    def GETorHEAD_base(self, req, server_type, ring, partition, path):
         """
         Base handler for HTTP GET or HEAD requests.
 
         :param req: swob.Request object
         :param server_type: server type
+        :param ring: the ring to obtain nodes from
         :param partition: partition
-        :param nodes: nodes
         :param path: path for the request
-        :param attempts: number of attempts to try
         :returns: swob.Response object
         """
         statuses = []
@@ -773,19 +816,12 @@ class Controller(object):
         bodies = []
         sources = []
         newest = config_true_value(req.headers.get('x-newest', 'f'))
-        nodes = iter(nodes)
-        while len(statuses) < attempts:
-            try:
-                node = nodes.next()
-            except StopIteration:
-                break
-            if self.error_limited(node):
-                continue
+        for node in self.iter_nodes(ring, partition):
             start_node_timing = time.time()
             try:
                 with ConnectionTimeout(self.app.conn_timeout):
-                    headers = dict(req.headers)
-                    headers['Connection'] = 'close'
+                    headers = self.generate_request_headers(
+                        req, additional=req.headers)
                     conn = http_connect(
                         node['ip'], node['port'], node['device'], partition,
                         req.method, path, headers=headers,
@@ -811,7 +847,7 @@ class Controller(object):
                     statuses.append(possible_source.status)
                     reasons.append(possible_source.reason)
                     bodies.append('')
-                    sources.append(possible_source)
+                    sources.append((possible_source, node))
                     if not newest:  # one good source is enough
                         break
             else:
@@ -819,7 +855,7 @@ class Controller(object):
                 reasons.append(possible_source.reason)
                 bodies.append(possible_source.read())
                 if possible_source.status == HTTP_INSUFFICIENT_STORAGE:
-                    self.error_limit(node)
+                    self.error_limit(node, _('ERROR Insufficient Storage'))
                 elif is_server_error(possible_source.status):
                     self.error_occurred(node, _('ERROR %(status)d %(body)s '
                                                 'From %(type)s Server') %
@@ -827,9 +863,9 @@ class Controller(object):
                                          'body': bodies[-1][:1024],
                                          'type': server_type})
         if sources:
-            sources.sort(key=source_key)
-            source = sources.pop()
-            for src in sources:
+            sources.sort(key=lambda s: source_key(s[0]))
+            source, node = sources.pop()
+            for src, _junk in sources:
                 self.close_swift_conn(src)
             res = Response(request=req, conditional_response=True)
             if req.method == 'GET' and \
@@ -905,15 +941,15 @@ class Controller(object):
             resp.status = HTTP_UNAUTHORIZED
             return resp
 
-        # Always allow the x-auth-token header. This ensures
-        # clients can always make a request to the resource.
+        # Allow all headers requested in the request. The CORS
+        # specification does leave the door open for this, as mentioned in
+        # http://www.w3.org/TR/cors/#resource-preflight-requests
+        # Note: Since the list of headers can be unbounded
+        # simply returning headers can be enough.
         allow_headers = set()
-        if cors.get('allow_headers'):
+        if req.headers.get('Access-Control-Request-Headers'):
             allow_headers.update(
-                [a.strip()
-                 for a in cors['allow_headers'].split(' ')
-                 if a.strip()])
-        allow_headers.add('x-auth-token')
+                list_from_csv(req.headers['Access-Control-Request-Headers']))
 
         # Populate the response with the CORS preflight headers
         headers['access-control-allow-origin'] = req_origin_value
@@ -921,7 +957,8 @@ class Controller(object):
             headers['access-control-max-age'] = cors.get('max_age')
         headers['access-control-allow-methods'] = \
             ', '.join(self.allowed_methods)
-        headers['access-control-allow-headers'] = ', '.join(allow_headers)
+        if allow_headers:
+            headers['access-control-allow-headers'] = ', '.join(allow_headers)
         resp.headers = headers
 
         return resp

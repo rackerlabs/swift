@@ -24,10 +24,9 @@
 #   These shenanigans are to ensure all related objects can be garbage
 # collected. We've seen objects hang around forever otherwise.
 
-import time
 from urllib import unquote
 
-from swift.common.utils import normalize_timestamp, public, csv_append
+from swift.common.utils import public, csv_append
 from swift.common.constraints import check_metadata, MAX_CONTAINER_NAME_LENGTH
 from swift.common.http import HTTP_ACCEPTED
 from swift.proxy.controllers.base import Controller, delay_denial, \
@@ -50,6 +49,12 @@ class ContainerController(Controller):
         self.account_name = unquote(account_name)
         self.container_name = unquote(container_name)
 
+    def _x_remove_headers(self):
+        st = self.server_type.lower()
+        return ['x-remove-%s-read' % st,
+                'x-remove-%s-write' % st,
+                'x-remove-versions-location']
+
     def clean_acls(self, req):
         if 'swift.clean_acl' in req.environ:
             for header in ('x-container-read', 'x-container-write'):
@@ -64,13 +69,12 @@ class ContainerController(Controller):
 
     def GETorHEAD(self, req):
         """Handler for HTTP GET/HEAD requests."""
-        if not self.account_info(self.account_name)[1]:
+        if not self.account_info(self.account_name, req)[1]:
             return HTTPNotFound(request=req)
-        part, nodes = self.app.container_ring.get_nodes(
+        part = self.app.container_ring.get_part(
             self.account_name, self.container_name)
-        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
-            req, _('Container'), part, nodes, req.path_info, len(nodes))
+            req, _('Container'), self.app.container_ring, part, req.path_info)
         if self.app.memcache:
             # set the memcache container size for ratelimiting
             cache_key = get_container_memcache_key(self.account_name,
@@ -120,8 +124,13 @@ class ContainerController(Controller):
                         (len(self.container_name), MAX_CONTAINER_NAME_LENGTH)
             return resp
         account_partition, accounts, container_count = \
-            self.account_info(self.account_name,
-                              autocreate=self.app.account_autocreate)
+            self.account_info(self.account_name)
+        if not accounts and self.app.account_autocreate:
+            self.autocreate_account(self.account_name)
+            account_partition, accounts, container_count = \
+                self.account_info(self.account_name)
+        if not accounts:
+            return HTTPNotFound(request=req)
         if self.app.max_containers_per_account > 0 and \
                 container_count >= self.app.max_containers_per_account and \
                 self.account_name not in self.app.max_containers_whitelist:
@@ -129,8 +138,6 @@ class ContainerController(Controller):
             resp.body = 'Reached container limit of %s' % \
                         self.app.max_containers_per_account
             return resp
-        if not accounts:
-            return HTTPNotFound(request=req)
         container_partition, containers = self.app.container_ring.get_nodes(
             self.account_name, self.container_name)
         headers = self._backend_requests(req, len(containers),
@@ -153,16 +160,12 @@ class ContainerController(Controller):
         if error_response:
             return error_response
         account_partition, accounts, container_count = \
-            self.account_info(self.account_name,
-                              autocreate=self.app.account_autocreate)
+            self.account_info(self.account_name)
         if not accounts:
             return HTTPNotFound(request=req)
         container_partition, containers = self.app.container_ring.get_nodes(
             self.account_name, self.container_name)
-        headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                   'x-trans-id': self.trans_id,
-                   'Connection': 'close'}
-        self.transfer_headers(req.headers, headers)
+        headers = self.generate_request_headers(req, transfer=True)
         if self.app.memcache:
             self.app.memcache.delete(get_container_memcache_key(
                 self.account_name, self.container_name))
@@ -176,7 +179,7 @@ class ContainerController(Controller):
     def DELETE(self, req):
         """HTTP DELETE request handler."""
         account_partition, accounts, container_count = \
-            self.account_info(self.account_name)
+            self.account_info(self.account_name, req)
         if not accounts:
             return HTTPNotFound(request=req)
         container_partition, containers = self.app.container_ring.get_nodes(
@@ -197,13 +200,8 @@ class ContainerController(Controller):
 
     def _backend_requests(self, req, n_outgoing,
                           account_partition, accounts):
-        headers = [{'Connection': 'close',
-                    'X-Timestamp': normalize_timestamp(time.time()),
-                    'x-trans-id': self.trans_id}
+        headers = [self.generate_request_headers(req, transfer=True)
                    for _junk in range(n_outgoing)]
-
-        for header in headers:
-            self.transfer_headers(req.headers, header)
 
         for i, account in enumerate(accounts):
             i = i % len(headers)

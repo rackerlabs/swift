@@ -66,9 +66,15 @@ Using this in combination with browser form post translation
 middleware could also allow direct-from-browser uploads to specific
 locations in Swift.
 
-Note that changing the X-Account-Meta-Temp-URL-Key will invalidate
-any previously generated temporary URLs within 60 seconds (the
-memcache time for the key).
+TempURL supports up to two keys, specified by X-Account-Meta-Temp-URL-Key and
+X-Account-Meta-Temp-URL-Key-2. Signatures are checked against both keys, if
+present. This is to allow for key rotation without invalidating all existing
+temporary URLs.
+
+Note that changing either X-Account-Meta-Temp-URL-Key or
+X-Account-Meta-Temp-URL-Key-2 will invalidate any previously generated
+temporary URLs signed with that key within 60 seconds (the memcache lifetime
+for the key). It is not instantaneous.
 
 With GET TempURLs, a Content-Disposition header will be set on the
 response so that browsers will interpret this as a file attachment to
@@ -92,12 +98,12 @@ import hmac
 from hashlib import sha1
 from os.path import basename
 from StringIO import StringIO
-from time import gmtime, strftime, time
-from urllib import unquote, urlencode
+from time import time
+from urllib import urlencode
 from urlparse import parse_qs
 
 from swift.common.wsgi import make_pre_authed_env
-from swift.common.http import HTTP_UNAUTHORIZED
+from swift.common.swob import HeaderKeyDict
 
 
 #: Default headers to remove from incoming requests. Simply a whitespace
@@ -174,6 +180,9 @@ class TempURL(object):
         #: The filter configuration dict.
         self.conf = conf
 
+        #: The methods allowed with Temp URLs.
+        self.methods = conf.get('methods', 'GET HEAD PUT').split()
+
         headers = DEFAULT_INCOMING_REMOVE_HEADERS
         if 'incoming_remove_headers' in conf:
             headers = conf['incoming_remove_headers']
@@ -203,7 +212,7 @@ class TempURL(object):
         headers = DEFAULT_OUTGOING_REMOVE_HEADERS
         if 'outgoing_remove_headers' in conf:
             headers = conf['outgoing_remove_headers']
-        headers = [h.lower() for h in headers.split()]
+        headers = [h.title() for h in headers.split()]
         #: Headers to remove from outgoing responses. Lowercase, like
         #: `x-account-meta-temp-url-key`.
         self.outgoing_remove_headers = [h for h in headers if h[-1] != '*']
@@ -215,7 +224,7 @@ class TempURL(object):
         headers = DEFAULT_OUTGOING_ALLOW_HEADERS
         if 'outgoing_allow_headers' in conf:
             headers = conf['outgoing_allow_headers']
-        headers = [h.lower() for h in headers.split()]
+        headers = [h.title() for h in headers.split()]
         #: Headers to allow in outgoing responses. Lowercase, like
         #: `x-matches-remove-prefix-but-okay`.
         self.outgoing_allow_headers = [h for h in headers if h[-1] != '*']
@@ -244,20 +253,20 @@ class TempURL(object):
         account = self._get_account(env)
         if not account:
             return self._invalid(env, start_response)
-        key = self._get_key(env, account)
-        if not key:
+        keys = self._get_keys(env, account)
+        if not keys:
             return self._invalid(env, start_response)
         if env['REQUEST_METHOD'] == 'HEAD':
-            hmac_val = self._get_hmac(env, temp_url_expires, key,
-                                      request_method='GET')
-            if temp_url_sig != hmac_val:
-                hmac_val = self._get_hmac(env, temp_url_expires, key,
-                                          request_method='PUT')
-                if temp_url_sig != hmac_val:
+            hmac_vals = self._get_hmacs(env, temp_url_expires, keys,
+                                        request_method='GET')
+            if temp_url_sig not in hmac_vals:
+                hmac_vals = self._get_hmacs(env, temp_url_expires, keys,
+                                            request_method='PUT')
+                if temp_url_sig not in hmac_vals:
                     return self._invalid(env, start_response)
         else:
-            hmac_val = self._get_hmac(env, temp_url_expires, key)
-            if temp_url_sig != hmac_val:
+            hmac_vals = self._get_hmacs(env, temp_url_expires, keys)
+            if temp_url_sig not in hmac_vals:
                 return self._invalid(env, start_response)
         self._clean_incoming_headers(env)
         env['swift.authorize'] = lambda req: None
@@ -293,14 +302,15 @@ class TempURL(object):
 
     def _get_account(self, env):
         """
-        Returns just the account for the request, if it's an object GET, PUT,
-        or HEAD request; otherwise, None is returned.
+        Returns just the account for the request, if it's an object
+        request and one of the configured methods; otherwise, None is
+        returned.
 
         :param env: The WSGI environment for the request.
         :returns: Account str or None.
         """
         account = None
-        if env['REQUEST_METHOD'] in ('GET', 'PUT', 'HEAD'):
+        if env['REQUEST_METHOD'] in self.methods:
             parts = env['PATH_INFO'].split('/', 4)
             # Must be five parts, ['', 'v1', 'a', 'c', 'o'], must be a v1
             # request, have account, container, and object values, and the
@@ -336,40 +346,57 @@ class TempURL(object):
             filename = qs['filename'][0]
         return temp_url_sig, temp_url_expires, filename
 
-    def _get_key(self, env, account):
+    def _get_keys(self, env, account):
         """
-        Returns the X-Account-Meta-Temp-URL-Key header value for the
-        account, or None if none is set.
+        Returns the X-Account-Meta-Temp-URL-Key[-2] header values for the
+        account, or an empty list if none is set.
+
+        Returns 0, 1, or 2 elements depending on how many keys are set
+        in the account's metadata.
 
         :param env: The WSGI environment for the request.
         :param account: Account str.
-        :returns: X-Account-Meta-Temp-URL-Key str value, or None.
+        :returns: [X-Account-Meta-Temp-URL-Key str value if set,
+                   X-Account-Meta-Temp-URL-Key-2 str value if set]
         """
-        key = None
+        keys = None
         memcache = env.get('swift.cache')
+        memcache_hash_key = 'temp-url-keys/%s' % account
         if memcache:
-            key = memcache.get('temp-url-key/%s' % account)
-        if not key:
+            keys = memcache.get(memcache_hash_key)
+        if keys is None:
             newenv = make_pre_authed_env(env, 'HEAD', '/v1/' + account,
                                          self.agent, swift_source='TU')
             newenv['CONTENT_LENGTH'] = '0'
             newenv['wsgi.input'] = StringIO('')
-            key = [None]
+            keys = []
 
             def _start_response(status, response_headers, exc_info=None):
                 for h, v in response_headers:
                     if h.lower() == 'x-account-meta-temp-url-key':
-                        key[0] = v
+                        keys.append(v)
+                    elif h.lower() == 'x-account-meta-temp-url-key-2':
+                        keys.append(v)
 
             i = iter(self.app(newenv, _start_response))
             try:
                 i.next()
             except StopIteration:
                 pass
-            key = key[0]
-            if key and memcache:
-                memcache.set('temp-url-key/%s' % account, key, time=60)
-        return key
+            if memcache:
+                memcache.set(memcache_hash_key, keys, time=60)
+        return keys
+
+    def _get_hmacs(self, env, expires, keys, request_method=None):
+        """
+        :param env: The WSGI environment for the request.
+        :param expires: Unix timestamp as an int for when the URL
+                        expires.
+        :param keys: Key strings, from the X-Account-Meta-Temp-URL-Key[-2] of
+                     the account.
+        """
+        return [self._get_hmac(env, expires, key, request_method)
+                for key in keys]
 
     def _get_hmac(self, env, expires, key, request_method=None):
         """
@@ -448,7 +475,7 @@ class TempURL(object):
                   removed as per the middlware configuration for
                   outgoing responses.
         """
-        headers = dict(headers)
+        headers = HeaderKeyDict(headers)
         for h in headers.keys():
             remove = h in self.outgoing_remove_headers
             if not remove:

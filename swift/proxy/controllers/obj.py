@@ -37,7 +37,7 @@ from eventlet.queue import Queue
 from eventlet.timeout import Timeout
 
 from swift.common.utils import ContextPool, normalize_timestamp, \
-    config_true_value, public, json, csv_append
+    config_true_value, public, json, csv_append, GreenthreadSafeIterator
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_metadata, check_object_creation, \
     CONTAINER_LISTING_LIMIT, MAX_FILE_SIZE
@@ -71,8 +71,9 @@ def copy_headers_into(from_r, to_r):
     :params from_r: a swob Request or Response
     :params to_r: a swob Request or Response
     """
+    pass_headers = ['x-delete-at']
     for k, v in from_r.headers.items():
-        if k.lower().startswith('x-object-meta-'):
+        if k.lower().startswith('x-object-meta-') or k.lower() in pass_headers:
             to_r.headers[k] = v
 
 
@@ -111,7 +112,7 @@ class SegmentedIterable(object):
         self.container = container
         self.listing = segment_listing_iter(listing)
         self.is_slo = is_slo
-        self.segment = 0
+        self.ratelimit_index = 0
         self.segment_dict = None
         self.segment_peek = None
         self.seek = 0
@@ -132,7 +133,7 @@ class SegmentedIterable(object):
                  segment no longer matches SLO manifest specifications.
         """
         try:
-            self.segment += 1
+            self.ratelimit_index += 1
             self.segment_dict = self.segment_peek or self.listing.next()
             self.segment_peek = None
             if self.container is None:
@@ -140,24 +141,21 @@ class SegmentedIterable(object):
                     self.segment_dict['name'].lstrip('/').split('/', 1)
             else:
                 container, obj = self.container, self.segment_dict['name']
-            partition, nodes = self.controller.app.object_ring.get_nodes(
+            partition = self.controller.app.object_ring.get_part(
                 self.controller.account_name, container, obj)
             path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
             req = Request.blank(path)
             if self.seek:
                 req.range = 'bytes=%s-' % self.seek
                 self.seek = 0
-            if not self.is_slo and self.segment > \
+            if not self.is_slo and self.ratelimit_index > \
                     self.controller.app.rate_limit_after_segment:
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
-            nodes = self.controller.app.sort_nodes(nodes)
             resp = self.controller.GETorHEAD_base(
-                req, _('Object'), partition,
-                self.controller.iter_nodes(partition, nodes,
-                                           self.controller.app.object_ring),
-                path, len(nodes))
+                req, _('Object'), self.controller.app.object_ring, partition,
+                path)
             if self.is_slo and resp.status_int == HTTP_NOT_FOUND:
                 raise SloSegmentError(_(
                     'Could not load object segment %(path)s:'
@@ -173,6 +171,9 @@ class SegmentedIterable(object):
                         '%(path)s etag: %(r_etag)s != %(s_etag)s.' %
                         {'path': path, 'r_etag': resp.etag,
                          's_etag': self.segment_dict['hash']}))
+                if 'X-Static-Large-Object' in resp.headers:
+                    raise SloSegmentError(_(
+                        'SLO can not be made of other SLOs: %s' % path))
             self.segment_iter = resp.app_iter
             # See NOTE: swift_conn at top of file about this.
             self.segment_iter_swift_conn = getattr(resp, 'swift_conn', None)
@@ -188,7 +189,7 @@ class SegmentedIterable(object):
                      'obj': self.controller.object_name, 'err': err})
                 err.swift_logged = True
                 self.response.status_int = HTTP_CONFLICT
-            raise StopIteration('Invalid manifiest segment')
+            raise
         except (Exception, Timeout), err:
             if not getattr(err, 'swift_logged', False):
                 self.controller.app.logger.exception(_(
@@ -246,7 +247,6 @@ class SegmentedIterable(object):
             if start:
                 self.segment_peek = self.listing.next()
                 while start >= self.position + self.segment_peek['bytes']:
-                    self.segment += 1
                     self.position += self.segment_peek['bytes']
                     self.segment_peek = self.listing.next()
                 self.seek = start - self.position
@@ -310,7 +310,7 @@ class ObjectController(Controller):
                 yield item
 
     def _listing_pages_iter(self, lcontainer, lprefix, env):
-        lpartition, lnodes = self.app.container_ring.get_nodes(
+        lpartition = self.app.container_ring.get_part(
             self.account_name, lcontainer)
         marker = ''
         while True:
@@ -322,10 +322,9 @@ class ObjectController(Controller):
             lreq.environ['QUERY_STRING'] = \
                 'format=json&prefix=%s&marker=%s' % (quote(lprefix),
                                                      quote(marker))
-            nodes = self.app.sort_nodes(lnodes)
             lresp = self.GETorHEAD_base(
-                lreq, _('Container'), lpartition, lnodes, lreq.path_info,
-                len(lnodes))
+                lreq, _('Container'), self.app.container_ring, lpartition,
+                lreq.path_info)
             if 'swift.authorize' in env:
                 lreq.acl = lresp.headers.get('x-container-read')
                 aresp = env['swift.authorize'](lreq)
@@ -378,21 +377,18 @@ class ObjectController(Controller):
 
     def GETorHEAD(self, req):
         """Handle HTTP GET or HEAD requests."""
-        container_info = self.container_info(self.account_name,
-                                             self.container_name)
+        container_info = self.container_info(
+            self.account_name, self.container_name, req)
         req.acl = container_info['read_acl']
         if 'swift.authorize' in req.environ:
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
 
-        partition, nodes = self.app.object_ring.get_nodes(
+        partition = self.app.object_ring.get_part(
             self.account_name, self.container_name, self.object_name)
-        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
-            req, _('Object'), partition,
-            self.iter_nodes(partition, nodes, self.app.object_ring),
-            req.path_info, len(nodes))
+            req, _('Object'), self.app.object_ring, partition, req.path_info)
 
         if ';' in resp.headers.get('content-type', ''):
             # strip off swift_bytes from content-type
@@ -402,6 +398,12 @@ class ObjectController(Controller):
                 resp.content_type = content_type
 
         large_object = None
+        if config_true_value(resp.headers.get('x-static-large-object')) and \
+                req.params.get('multipart-manifest') == 'get' and \
+                'X-Copy-From' not in req.headers and \
+                self.app.allow_static_large_object:
+            resp.content_type = 'application/json'
+
         if config_true_value(resp.headers.get('x-static-large-object')) and \
                 req.params.get('multipart-manifest') != 'get' and \
                 self.app.allow_static_large_object:
@@ -420,11 +422,9 @@ class ObjectController(Controller):
                 new_req = req.copy_get()
                 new_req.method = 'GET'
                 new_req.range = None
-                nodes = self.app.sort_nodes(nodes)
                 new_resp = self.GETorHEAD_base(
-                    new_req, _('Object'), partition,
-                    self.iter_nodes(partition, nodes, self.app.object_ring),
-                    req.path_info, len(nodes))
+                    new_req, _('Object'), self.app.object_ring, partition,
+                    req.path_info)
                 if new_resp.status_int // 100 == 2:
                     try:
                         listing = json.loads(new_resp.body)
@@ -568,8 +568,7 @@ class ObjectController(Controller):
             if error_response:
                 return error_response
             container_info = self.container_info(
-                self.account_name, self.container_name,
-                account_autocreate=self.app.account_autocreate)
+                self.account_name, self.container_name)
             container_partition = container_info['partition']
             containers = container_info['nodes']
             req.acl = container_info['write_acl']
@@ -614,7 +613,7 @@ class ObjectController(Controller):
     def _backend_requests(self, req, n_outgoing,
                           container_partition, containers,
                           delete_at_partition=None, delete_at_nodes=None):
-        headers = [dict(req.headers.iteritems())
+        headers = [self.generate_request_headers(req, additional=req.headers)
                    for _junk in range(n_outgoing)]
 
         for header in headers:
@@ -681,7 +680,7 @@ class ObjectController(Controller):
                     conn.node = node
                     return conn
                 elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                    self.error_limit(node)
+                    self.error_limit(node, _('ERROR Insufficient Storage'))
             except:
                 self.exception_occurred(node, _('Object'),
                                         _('Expect: 100-continue on %s') % path)
@@ -692,8 +691,7 @@ class ObjectController(Controller):
     def PUT(self, req):
         """HTTP PUT request handler."""
         container_info = self.container_info(
-            self.account_name, self.container_name,
-            account_autocreate=self.app.account_autocreate)
+            self.account_name, self.container_name)
         container_partition = container_info['partition']
         containers = container_info['nodes']
         req.acl = container_info['write_acl']
@@ -713,25 +711,6 @@ class ObjectController(Controller):
                                           content_type='text/plain',
                                           body='Non-integer X-Delete-After')
             req.headers['x-delete-at'] = '%d' % (time.time() + x_delete_after)
-        if 'x-delete-at' in req.headers:
-            try:
-                x_delete_at = int(req.headers['x-delete-at'])
-                if x_delete_at < time.time():
-                    return HTTPBadRequest(
-                        body='X-Delete-At in past', request=req,
-                        content_type='text/plain')
-            except ValueError:
-                return HTTPBadRequest(request=req, content_type='text/plain',
-                                      body='Non-integer X-Delete-At')
-            delete_at_container = str(
-                x_delete_at /
-                self.app.expiring_objects_container_divisor *
-                self.app.expiring_objects_container_divisor)
-            delete_at_part, delete_at_nodes = \
-                self.app.container_ring.get_nodes(
-                    self.app.expiring_objects_account, delete_at_container)
-        else:
-            delete_at_part = delete_at_nodes = None
         partition, nodes = self.app.object_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
         # do a HEAD request for container sync and checking object versions
@@ -740,8 +719,9 @@ class ObjectController(Controller):
                  req.environ.get('swift_versioned_copy')):
             hreq = Request.blank(req.path_info, headers={'X-Newest': 'True'},
                                  environ={'REQUEST_METHOD': 'HEAD'})
-            hresp = self.GETorHEAD_base(hreq, _('Object'), partition, nodes,
-                                        hreq.path_info, len(nodes))
+            hresp = self.GETorHEAD_base(
+                hreq, _('Object'), self.app.object_ring, partition,
+                hreq.path_info)
         # Used by container sync feature
         if 'x-timestamp' in req.headers:
             try:
@@ -863,7 +843,29 @@ class ObjectController(Controller):
                     source_resp.headers['X-Static-Large-Object']
 
             req = new_req
-        node_iter = self.iter_nodes(partition, nodes, self.app.object_ring)
+
+        if 'x-delete-at' in req.headers:
+            try:
+                x_delete_at = int(req.headers['x-delete-at'])
+                if x_delete_at < time.time():
+                    return HTTPBadRequest(
+                        body='X-Delete-At in past', request=req,
+                        content_type='text/plain')
+            except ValueError:
+                return HTTPBadRequest(request=req, content_type='text/plain',
+                                      body='Non-integer X-Delete-At')
+            delete_at_container = str(
+                x_delete_at /
+                self.app.expiring_objects_container_divisor *
+                self.app.expiring_objects_container_divisor)
+            delete_at_part, delete_at_nodes = \
+                self.app.container_ring.get_nodes(
+                    self.app.expiring_objects_account, delete_at_container)
+        else:
+            delete_at_part = delete_at_nodes = None
+
+        node_iter = GreenthreadSafeIterator(
+            self.iter_nodes(self.app.object_ring, partition))
         pile = GreenPile(len(nodes))
         chunked = req.headers.get('transfer-encoding')
 
@@ -988,8 +990,8 @@ class ObjectController(Controller):
     @delay_denial
     def DELETE(self, req):
         """HTTP DELETE request handler."""
-        container_info = self.container_info(self.account_name,
-                                             self.container_name)
+        container_info = self.container_info(
+            self.account_name, self.container_name, req)
         container_partition = container_info['partition']
         containers = container_info['nodes']
         req.acl = container_info['write_acl']
@@ -1040,8 +1042,8 @@ class ObjectController(Controller):
                 self.container_name = lcontainer
                 self.object_name = last_item['name']
                 new_del_req = Request.blank(copy_path, environ=req.environ)
-                container_info = self.container_info(self.account_name,
-                                                     self.container_name)
+                container_info = self.container_info(
+                    self.account_name, self.container_name, req)
                 container_partition = container_info['partition']
                 containers = container_info['nodes']
                 new_del_req.acl = container_info['write_acl']

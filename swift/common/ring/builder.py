@@ -27,6 +27,8 @@ from swift.common import exceptions
 from swift.common.ring import RingData
 from swift.common.ring.utils import tiers_for_dev, build_tier_tree
 
+MAX_BALANCE = 999.99
+
 
 class RingBuilder(object):
     """
@@ -414,9 +416,9 @@ class RingBuilder(object):
                     if dev_usage[dev['id']]:
                         # If a device has no weight, but has partitions, then
                         # its overage is considered "infinity" and therefore
-                        # always the worst possible. We show 999.99 for
+                        # always the worst possible. We show MAX_BALANCE for
                         # convenience.
-                        worst = 999.99
+                        worst = MAX_BALANCE
                         break
                     continue
                 skew = abs(100.0 * dev_usage[dev['id']] /
@@ -444,8 +446,8 @@ class RingBuilder(object):
                 if dev['parts']:
                     # If a device has no weight, but has partitions, then its
                     # overage is considered "infinity" and therefore always the
-                    # worst possible. We show 999.99 for convenience.
-                    balance = 999.99
+                    # worst possible. We show MAX_BALANCE for convenience.
+                    balance = MAX_BALANCE
                     break
                 continue
             dev_balance = abs(100.0 * dev['parts'] /
@@ -989,13 +991,30 @@ class RingBuilder(object):
             #really old rings didn't have meta keys
             if dev and 'meta' not in dev:
                 dev['meta'] = ''
+            # NOTE(akscram): An old ring builder file don't contain
+            #                replication parameters.
+            if dev:
+                if 'ip' in dev:
+                    dev.setdefault('replication_ip', dev['ip'])
+                if 'port' in dev:
+                    dev.setdefault('replication_port', dev['port'])
         return builder
+
+    def save(self, builder_file):
+        """Serialize this RingBuilder instance to disk.
+
+        :param builder_file: path to builder file to save
+        """
+        pickle.dump(self.to_dict(), open(builder_file, 'wb'), protocol=2)
 
     def search_devs(self, search_value):
         """
     The <search-value> can be of the form::
 
-        d<device_id>r<region>z<zone>-<ip>:<port>/<device_name>_<meta>
+        d<device_id>r<region>z<zone>-<ip>:<port>[R<r_ip>:<r_port>]/
+         <device_name>_<meta>
+
+    Where <r_ip> and <r_port> are replication ip and port.
 
     Any part is optional, but you must include at least one part.
 
@@ -1008,6 +1027,10 @@ class RingBuilder(object):
         1.2.3.4          Matches devices in any zone with the ip 1.2.3.4
         z1:5678          Matches devices in zone 1 using port 5678
         :5678            Matches devices that use port 5678
+        R5.6.7.8         Matches devices that use replication ip 5.6.7.8
+        R:5678           Matches devices that use replication port 5678
+        1.2.3.4R5.6.7.8  Matches devices that use ip 1.2.3.4 and replication ip
+                         5.6.7.8
         /sdb1            Matches devices with the device name sdb1
         _shiny           Matches devices with shiny in the meta data
         _"snet: 5.6.7.8" Matches devices with snet: 5.6.7.8 in the meta data
@@ -1064,6 +1087,30 @@ class RingBuilder(object):
                 i += 1
             match.append(('port', int(search_value[1:i])))
             search_value = search_value[i:]
+        # replication parameters
+        if search_value.startswith('R'):
+            search_value = search_value[1:]
+            if len(search_value) and search_value[0].isdigit():
+                i = 1
+                while (i < len(search_value) and
+                       search_value[i] in '0123456789.'):
+                    i += 1
+                match.append(('replication_ip', search_value[:i]))
+                search_value = search_value[i:]
+            elif len(search_value) and search_value[0] == '[':
+                i = 1
+                while i < len(search_value) and search_value[i] != ']':
+                    i += 1
+                i += 1
+                match.append(('replication_ip',
+                              search_value[:i].lstrip('[').rstrip(']')))
+                search_value = search_value[i:]
+            if search_value.startswith(':'):
+                i = 1
+                while i < len(search_value) and search_value[i].isdigit():
+                    i += 1
+                match.append(('replication_port', int(search_value[1:i])))
+                search_value = search_value[i:]
         if search_value.startswith('/'):
             i = 1
             while i < len(search_value) and search_value[i] != '_':

@@ -14,9 +14,9 @@
 # limitations under the License.
 
 from httplib import HTTPConnection
-from os import kill
+from os import kill, path
 from signal import SIGTERM
-from subprocess import Popen, PIPE, STDOUT
+from subprocess import Popen, PIPE
 from time import sleep, time
 
 from swiftclient import get_auth, head_account
@@ -29,6 +29,9 @@ from test.probe import CHECK_SERVER_TIMEOUT
 def start_server(port, port2server, pids, check=True):
     server = port2server[port]
     if server[:-1] in ('account', 'container', 'object'):
+        if not path.exists('/etc/swift/%s-server/%s.conf' %
+                           (server[:-1], server[-1])):
+            return None
         pids[server] = Popen([
             'swift-%s-server' % server[:-1],
             '/etc/swift/%s-server/%s.conf' % (server[:-1], server[-1])]).pid
@@ -45,6 +48,8 @@ def start_server(port, port2server, pids, check=True):
 def check_server(port, port2server, pids, timeout=CHECK_SERVER_TIMEOUT):
     server = port2server[port]
     if server[:-1] in ('account', 'container', 'object'):
+        if int(server[-1]) > 4:
+            return None
         path = '/connect/1/2'
         if server[:-1] == 'container':
             path += '/3'
@@ -56,7 +61,9 @@ def check_server(port, port2server, pids, timeout=CHECK_SERVER_TIMEOUT):
                 conn = HTTPConnection('127.0.0.1', port)
                 conn.request('GET', path)
                 resp = conn.getresponse()
-                if resp.status != 404:
+                # 404 because it's a nonsense path (and mount_check is false)
+                # 507 in case the test target is a VM using mount_check
+                if resp.status not in (404, 507):
                     raise Exception(
                         'Unexpected status %s' % resp.status)
                 break
@@ -130,9 +137,10 @@ def reset_environment():
     pids = {}
     try:
         port2server = {}
+        config_dict = {}
         for server, port in [('account', 6002), ('container', 6001),
                              ('object', 6000)]:
-            for number in xrange(1, 5):
+            for number in xrange(1, 9):
                 port2server[port + (number * 10)] = '%s%d' % (server, number)
         for port in port2server:
             start_server(port, port2server, pids, check=False)
@@ -143,6 +151,9 @@ def reset_environment():
         account_ring = Ring('/etc/swift/account.ring.gz')
         container_ring = Ring('/etc/swift/container.ring.gz')
         object_ring = Ring('/etc/swift/object.ring.gz')
+        for name in ('account', 'container', 'object'):
+            for server in (name, '%s-replicator' % name):
+                config_dict[server] = '/etc/swift/%s-server/%%d.conf' % name
     except BaseException:
         try:
             raise
@@ -152,14 +163,17 @@ def reset_environment():
             except Exception:
                 pass
     return pids, port2server, account_ring, container_ring, object_ring, url, \
-        token, account
+        token, account, config_dict
 
 
 def get_to_final_state():
     processes = []
     for job in ('account-replicator', 'container-replicator',
                 'object-replicator'):
-        for number in xrange(1, 5):
+        for number in xrange(1, 9):
+            if not path.exists('/etc/swift/%s-server/%d.conf' %
+                               (job.split('-')[0], number)):
+                continue
             processes.append(Popen([
                 'swift-%s' % job,
                 '/etc/swift/%s-server/%d.conf' % (job.split('-')[0], number),
@@ -178,7 +192,10 @@ def get_to_final_state():
     processes = []
     for job in ('account-replicator', 'container-replicator',
                 'object-replicator'):
-        for number in xrange(1, 5):
+        for number in xrange(1, 9):
+            if not path.exists('/etc/swift/%s-server/%d.conf' %
+                               (job.split('-')[0], number)):
+                continue
             processes.append(Popen([
                 'swift-%s' % job,
                 '/etc/swift/%s-server/%d.conf' % (job.split('-')[0], number),

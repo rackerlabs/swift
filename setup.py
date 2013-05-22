@@ -55,6 +55,7 @@ setup(
         'bin/swift-account-server',
         'bin/swift-bench',
         'bin/swift-bench-client',
+        'bin/swift-config',
         'bin/swift-container-auditor',
         'bin/swift-container-replicator',
         'bin/swift-container-server',
@@ -89,6 +90,7 @@ setup(
         ],
         'paste.filter_factory': [
             'healthcheck=swift.common.middleware.healthcheck:filter_factory',
+            'crossdomain=swift.common.middleware.crossdomain:filter_factory',
             'memcache=swift.common.middleware.memcache:filter_factory',
             'ratelimit=swift.common.middleware.ratelimit:filter_factory',
             'cname_lookup=swift.common.middleware.cname_lookup:filter_factory',

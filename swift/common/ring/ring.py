@@ -146,6 +146,17 @@ class Ring(object):
             ring_data = RingData.load(self.serialized_path)
             self._mtime = getmtime(self.serialized_path)
             self._devs = ring_data.devs
+            # NOTE(akscram): Replication parameters like replication_ip
+            #                and replication_port are required for
+            #                replication process. An old replication
+            #                ring doesn't contain this parameters into
+            #                device.
+            for dev in self._devs:
+                if dev:
+                    if 'ip' in dev:
+                        dev.setdefault('replication_ip', dev['ip'])
+                    if 'port' in dev:
+                        dev.setdefault('replication_port', dev['port'])
 
             self._replica2part2dev_id = ring_data._replica2part2dev_id
             self._part_shift = ring_data._part_shift
@@ -204,6 +215,21 @@ class Ring(object):
                 seen_ids.add(dev_id)
         return part_nodes
 
+    def get_part(self, account, container=None, obj=None):
+        """
+        Get the partition for an account/container/object.
+
+        :param account: account name
+        :param container: container name
+        :param obj: object name
+        :returns: the partition number
+        """
+        key = hash_path(account, container, obj, raw_digest=True)
+        if time() > self._rtime:
+            self._reload()
+        part = struct.unpack_from('>I', key)[0] >> self._part_shift
+        return part
+
     def get_part_nodes(self, part):
         """
         Get the nodes that are responsible for the partition. If one
@@ -248,10 +274,7 @@ class Ring(object):
                 hardware description
         ======  ===============================================================
         """
-        key = hash_path(account, container, obj, raw_digest=True)
-        if time() > self._rtime:
-            self._reload()
-        part = struct.unpack_from('>I', key)[0] >> self._part_shift
+        part = self.get_part(account, container, obj)
         return part, self._get_part_nodes(part)
 
     def get_more_nodes(self, part):

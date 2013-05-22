@@ -262,7 +262,7 @@ class TestUntar(unittest.TestCase):
             {'base_fails1': [{'sub_dir1': ['sub1_file1']},
                              {'sub_dir2': ['sub2_file1', 'sub2_file2']},
                              {'sub_dir3': [{'sub4_dir1': 'sub4_file1'}]}]}]
-        tar = self.build_tar(dir_tree)
+        self.build_tar(dir_tree)
         req = Request.blank('/tar_works/acc/',
                             headers={'Accept': 'application/json'})
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
@@ -273,7 +273,7 @@ class TestUntar(unittest.TestCase):
         self.assertEquals(resp_data['Number Files Created'], 4)
 
     def test_extract_tar_fail_cont_401(self):
-        tar = self.build_tar()
+        self.build_tar()
         req = Request.blank('/unauth/acc/')
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
                                                       'tar_fails.tar'))
@@ -282,7 +282,7 @@ class TestUntar(unittest.TestCase):
         self.assertTrue('Response Status: 401 Unauthorized' in resp_body)
 
     def test_extract_tar_fail_obj_401(self):
-        tar = self.build_tar()
+        self.build_tar()
         req = Request.blank('/create_obj_unauth/acc/cont/')
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
                                                       'tar_fails.tar'))
@@ -291,7 +291,7 @@ class TestUntar(unittest.TestCase):
         self.assertTrue('Response Status: 401 Unauthorized' in resp_body)
 
     def test_extract_tar_fail_obj_name_len(self):
-        tar = self.build_tar()
+        self.build_tar()
         req = Request.blank('/tar_works/acc/cont/',
                             headers={'Accept': 'application/json'})
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
@@ -304,7 +304,7 @@ class TestUntar(unittest.TestCase):
                           '/tar_works/acc/cont/base_fails1/' + ('f' * 101))
 
     def test_extract_tar_fail_compress_type(self):
-        tar = self.build_tar()
+        self.build_tar()
         req = Request.blank('/tar_works/acc/cont/')
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
                                                       'tar_fails.tar'))
@@ -314,7 +314,7 @@ class TestUntar(unittest.TestCase):
         self.assertEquals(self.app.calls, 0)
 
     def test_extract_tar_fail_max_file_name_length(self):
-        tar = self.build_tar()
+        self.build_tar()
         with patch.object(self.bulk, 'max_failed_extractions', 1):
             self.app.calls = 0
             req = Request.blank('/tar_works/acc/cont/',
@@ -353,7 +353,7 @@ class TestUntar(unittest.TestCase):
                     {'sub_dir2': ['sub2_file1', 'sub2_file2']},
                     'f' * 101,
                     {'sub_dir3': [{'sub4_dir1': 'sub4_file1'}]}]
-        tar = self.build_tar(dir_tree)
+        self.build_tar(dir_tree)
         with patch.object(self.bulk, 'max_containers', 1):
             self.app.calls = 0
             body = open(os.path.join(self.testdir, 'tar_fails.tar')).read()
@@ -369,7 +369,7 @@ class TestUntar(unittest.TestCase):
             {'sub_dir2': ['sub2_file1', 'sub2_file2']},
             'f\xde',
             {'./sub_dir3': [{'sub4_dir1': 'sub4_file1'}]}]}]
-        tar = self.build_tar(dir_tree)
+        self.build_tar(dir_tree)
         req = Request.blank('/create_cont_fail/acc/cont/',
                             headers={'Accept': 'application/json'})
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,
@@ -381,7 +381,7 @@ class TestUntar(unittest.TestCase):
         self.assertEquals(len(resp_data['Errors']), 5)
 
     def test_extract_tar_fail_create_cont_value_err(self):
-        tar = self.build_tar()
+        self.build_tar()
         req = Request.blank('/create_cont_fail/acc/cont/',
                             headers={'Accept': 'application/json'})
         req.environ['wsgi.input'] = open(os.path.join(self.testdir,

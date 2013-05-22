@@ -231,7 +231,7 @@ class HeaderEnvironProxy(UserDict.DictMixin):
 
 class HeaderKeyDict(dict):
     """
-    A dict that lower-cases all keys on the way in, so as to be
+    A dict that title-cases all keys on the way in, so as to be
     case-insensitive.
     """
     def __init__(self, *args, **kwargs):
@@ -242,30 +242,30 @@ class HeaderKeyDict(dict):
     def update(self, other):
         if hasattr(other, 'keys'):
             for key in other.keys():
-                self[key.lower()] = other[key]
+                self[key.title()] = other[key]
         else:
             for key, value in other:
-                self[key.lower()] = value
+                self[key.title()] = value
 
     def __getitem__(self, key):
-        return dict.get(self, key.lower())
+        return dict.get(self, key.title())
 
     def __setitem__(self, key, value):
         if value is None:
-            self.pop(key.lower(), None)
+            self.pop(key.title(), None)
         elif isinstance(value, unicode):
-            return dict.__setitem__(self, key.lower(), value.encode('utf-8'))
+            return dict.__setitem__(self, key.title(), value.encode('utf-8'))
         else:
-            return dict.__setitem__(self, key.lower(), str(value))
+            return dict.__setitem__(self, key.title(), str(value))
 
     def __contains__(self, key):
-        return dict.__contains__(self, key.lower())
+        return dict.__contains__(self, key.title())
 
     def __delitem__(self, key):
-        return dict.__delitem__(self, key.lower())
+        return dict.__delitem__(self, key.title())
 
     def get(self, key, default=None):
-        return dict.get(self, key.lower(), default)
+        return dict.get(self, key.title(), default)
 
 
 def _resp_status_property():
@@ -803,6 +803,9 @@ class Request(object):
         "Provides the full url of the request"
         return self.host_url + self.path_qs
 
+    def as_referer(self):
+        return self.method + ' ' + self.url
+
     def path_info_pop(self):
         """
         Takes one path portion (delineated by slashes) from the
@@ -925,7 +928,7 @@ class Response(object):
     charset = _resp_charset_property()
     app_iter = _resp_app_iter_property()
 
-    def __init__(self, body=None, status=200, headers={}, app_iter=None,
+    def __init__(self, body=None, status=200, headers=None, app_iter=None,
                  request=None, conditional_response=False, **kw):
         self.headers = HeaderKeyDict(
             [('Content-Type', 'text/html; charset=UTF-8')])
@@ -939,7 +942,8 @@ class Response(object):
             self.environ = request.environ
         else:
             self.environ = {}
-        self.headers.update(headers)
+        if headers:
+            self.headers.update(headers)
         for key, value in kw.iteritems():
             setattr(self, key, value)
 

@@ -1,6 +1,5 @@
 """ Swift tests """
 
-import sys
 import os
 import copy
 import logging
@@ -12,13 +11,11 @@ from eventlet.green import socket
 from tempfile import mkdtemp
 from shutil import rmtree
 from test import get_config
-from ConfigParser import MissingSectionHeaderError
-from StringIO import StringIO
-from swift.common.utils import readconf, config_true_value
-from logging import Handler
+from swift.common.utils import config_true_value
 from hashlib import md5
-from eventlet import sleep, spawn, Timeout
+from eventlet import sleep, Timeout
 import logging.handlers
+from httplib import HTTPException
 
 
 def readuntil2crlfs(fd):
@@ -27,6 +24,8 @@ def readuntil2crlfs(fd):
     crlfs = 0
     while crlfs < 2:
         c = fd.read(1)
+        if not c:
+            raise ValueError("didn't get two CRLFs; just got %r" % rv)
         rv = rv + c
         if c == '\r' and lc != '\n':
             crlfs = 0
@@ -276,7 +275,7 @@ def fake_http_connect(*code_iter, **kwargs):
     class FakeConn(object):
 
         def __init__(self, status, etag=None, body='', timestamp='1',
-                     expect_status=None):
+                     expect_status=None, headers=None):
             self.status = status
             if expect_status is None:
                 self.expect_status = self.status
@@ -289,6 +288,7 @@ def fake_http_connect(*code_iter, **kwargs):
             self.received = 0
             self.etag = etag
             self.body = body
+            self.headers = headers or {}
             self.timestamp = timestamp
 
         def getresponse(self):
@@ -320,6 +320,7 @@ def fake_http_connect(*code_iter, **kwargs):
                        'x-timestamp': self.timestamp,
                        'last-modified': self.timestamp,
                        'x-object-meta-test': 'testing',
+                       'x-delete-at': '9876543210',
                        'etag': etag,
                        'x-works': 'yes',
                        'x-account-container-count': kwargs.get('count', 12345)}
@@ -332,8 +333,7 @@ def fake_http_connect(*code_iter, **kwargs):
                 pass
             if 'slow' in kwargs:
                 headers['content-length'] = '4'
-            if 'headers' in kwargs:
-                headers.update(kwargs['headers'])
+            headers.update(self.headers)
             return headers.items()
 
         def read(self, amt=None):
@@ -357,6 +357,11 @@ def fake_http_connect(*code_iter, **kwargs):
 
     timestamps_iter = iter(kwargs.get('timestamps') or ['1'] * len(code_iter))
     etag_iter = iter(kwargs.get('etags') or [None] * len(code_iter))
+    if isinstance(kwargs.get('headers'), list):
+        headers_iter = iter(kwargs['headers'])
+    else:
+        headers_iter = iter([kwargs.get('headers', {})] * len(code_iter))
+
     x = kwargs.get('missing_container', [False] * len(code_iter))
     if not isinstance(x, (tuple, list)):
         x = [x] * len(code_iter)
@@ -381,6 +386,7 @@ def fake_http_connect(*code_iter, **kwargs):
         else:
             expect_status = status
         etag = etag_iter.next()
+        headers = headers_iter.next()
         timestamp = timestamps_iter.next()
 
         if status <= 0:
@@ -390,6 +396,6 @@ def fake_http_connect(*code_iter, **kwargs):
         else:
             body = body_iter.next()
         return FakeConn(status, etag, body=body, timestamp=timestamp,
-                        expect_status=expect_status)
+                        expect_status=expect_status, headers=headers)
 
     return connect
