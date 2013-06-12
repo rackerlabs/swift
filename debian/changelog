@@ -1,3 +1,38 @@
+swift (1.8.1~rax6) lucid; urgency=low
+
+  * 752647a Fix functional tests with keystone.
+  * 69f58f7 Tempauth - remove change made to HTTP_X_AUTH_TOKEN
+  * f559c50 Local read affinity for GET/HEAD requests.
+  * 483c5ec Add non-slash delimiter tests
+  * fef2afd Fixed Bug 1187200
+  * 58f4e0f get_info - removes duplicate code (Take 3)
+  * 209c5ec Add parallelism to object expirer daemon.
+  * b491549 Use threadpools in the object server for performance.
+  * 157f616 Remove <cond> and <val1> or <val2> systax
+  * 4b5db1d Improve config samples
+  * efdb0e3 Make sample configs more readable.
+  * a65fc24 Restore loadapp checking
+  * 02abdb9 Change to use dash instead of slash
+  * 567b43e Add requirements files to the source distribution
+  * 442fd83 implement an rsync_bwlimit setting for object replicator
+  * 98ea844 Replaced <exc>.message with str(<exc>)
+  * 15c2ca5 Fix faked-out account GET for JSON and XML.
+  * d2dba73 Mock SysLogHandler for proxy/test_server.py
+  * 627d0ba Rename requires files to standard names.
+  * 2c9aee5 In TempURL, cache "no keys" for a shorter time.
+  * 8d681f0 Subtle change to tempurl content-disposition names
+  * 8d6869a Move parameter checking before disk accesses
+  * b147c9e Made tests use a JSON parser in liue of eval.
+  * 5174b7f Rework to support RFC 2616 Sec 4.4 Message Length
+  * 9745a28 Handle DB creation race condition
+  * 3957dbc RingBuilder.add_dev returns device id
+  * 43bf568 Move parse search logic outside from builder
+  * 7a02c21 Fixed probetests
+  * 1c8d188 Put some comments in places we get asked about a lot
+  * 7fbb97b Retrieve the swift version with recon
+
+ -- Michael Barton <michael.barton@rackspace.com>  Wed, 12 May 2013 13:27:00 +0000
+
 swift (1.8.1~rax5) lucid; urgency=low
 
   * 6b4cba8 Merge "close socket on exceptions"
