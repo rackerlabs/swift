@@ -27,17 +27,24 @@ class FakeMemcache(object):
 
     def __init__(self):
         self.store = {}
+        self.times = {}
 
     def get(self, key):
         return self.store.get(key)
 
     def set(self, key, value, time=0):
         self.store[key] = value
+        self.times[key] = time
         return True
 
     def incr(self, key, time=0):
         self.store[key] = self.store.setdefault(key, 0) + 1
+        if time:
+            self.times[key] = time
         return self.store[key]
+
+    def time_for_key(self, key):
+        return self.times.get(key)
 
     @contextmanager
     def soft_lock(self, key, timeout=0, retries=5):
@@ -161,6 +168,44 @@ class TestTempURL(unittest.TestCase):
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
 
+    def test_obj_trailing_slash(self):
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o/'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(path, environ={
+            'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s' % (
+                sig, expires)})
+        req.environ['swift.cache'].set('temp-url-keys/a', [key])
+        self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.headers['content-disposition'],
+                          'attachment; filename="o"')
+        self.assertEquals(req.environ['swift.authorize_override'], True)
+        self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
+    def test_filename_trailing_slash(self):
+        method = 'GET'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(path, environ={
+            'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s&'
+            'filename=/i/want/this/just/as/it/is/' % (sig, expires)})
+        req.environ['swift.cache'].set('temp-url-keys/a', [key])
+        self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.headers['content-disposition'],
+                          'attachment; filename="/i/want/this/just/as/it/is/"')
+        self.assertEquals(req.environ['swift.authorize_override'], True)
+        self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
     def test_get_valid_but_404(self):
         method = 'GET'
         expires = int(time() + 86400)
@@ -225,6 +270,40 @@ class TestTempURL(unittest.TestCase):
         resp = req.get_response(self.tempurl)
         self.assertEquals(resp.status_int, 401)
         self.assertTrue('Temp URL invalid' in resp.body)
+
+    def test_cache_miss_with_keys(self):
+        self.app.status_headers_body_iter = iter(
+            [('200 OK', {'X-Account-Meta-Temp-Url-Key': 'some-key'}, '')])
+        # doesn't have to be valid, just has to trigger a check
+        req = self._make_request('/v1/a/c/o',
+            environ={'QUERY_STRING':
+                     'temp_url_sig=abcd&temp_url_expires=%d' %
+                     int(time() + 1000)})
+        resp = req.get_response(self.tempurl)
+
+        self.assertEquals(resp.status_int, 401)
+        self.assertEquals(
+            ['some-key'],
+            req.environ['swift.cache'].get('temp-url-keys/a'))
+        self.assertEquals(
+            60,
+            req.environ['swift.cache'].time_for_key('temp-url-keys/a'))
+
+    def test_cache_miss_without_keys(self):
+        self.app.status_headers_body_iter = iter([('200 OK', {}, '')])
+        req = self._make_request('/v1/a/c/o',
+            environ={'QUERY_STRING':
+                     'temp_url_sig=abcd&temp_url_expires=%d' %
+                     int(time() + 1000)})
+        resp = req.get_response(self.tempurl)
+
+        self.assertEquals(resp.status_int, 401)
+        self.assertEquals(
+            [],
+            req.environ['swift.cache'].get('temp-url-keys/a'))
+        self.assertEquals(
+            6,
+            req.environ['swift.cache'].time_for_key('temp-url-keys/a'))
 
     def test_missing_sig(self):
         method = 'GET'

@@ -17,9 +17,12 @@
 
 import errno
 import fcntl
+import operator
 import os
 import pwd
+import re
 import sys
+import threading as stdlib_threading
 import time
 import uuid
 import functools
@@ -32,6 +35,7 @@ import ctypes.util
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
     RawConfigParser
 from optparse import OptionParser
+from Queue import Queue, Empty
 from tempfile import mkstemp, NamedTemporaryFile
 try:
     import simplejson as json
@@ -44,7 +48,8 @@ import itertools
 
 import eventlet
 import eventlet.semaphore
-from eventlet import GreenPool, sleep, Timeout, tpool
+from eventlet import GreenPool, sleep, Timeout, tpool, greenthread, \
+    greenio, event
 from eventlet.green import socket, threading
 import netifaces
 import codecs
@@ -1021,7 +1026,7 @@ def storage_directory(datadir, partition, hash):
 
 def hash_path(account, container=None, object=None, raw_digest=False):
     """
-    Get the connonical hash for an account/container/object
+    Get the canonical hash for an account/container/object
 
     :param account: Account
     :param container: Container
@@ -1523,6 +1528,63 @@ def validate_sync_to(value, allowed_sync_hosts):
     return None
 
 
+def affinity_key_function(affinity_str):
+    """Turns an affinity config value into a function suitable for passing to
+    sort(). After doing so, the array will be sorted with respect to the given
+    ordering.
+
+    For example, if affinity_str is "r1=1, r2z7=2, r2z8=2", then the array
+    will be sorted with all nodes from region 1 (r1=1) first, then all the
+    nodes from region 2 zones 7 and 8 (r2z7=2 and r2z8=2), then everything
+    else.
+
+    Note that the order of the pieces of affinity_str is irrelevant; the
+    priority values are what comes after the equals sign.
+
+    If affinity_str is empty or all whitespace, then the resulting function
+    will not alter the ordering of the nodes. However, if affinity_str
+    contains an invalid value, then None is returned.
+
+    :param affinity_str: affinity config value, e.g. "r1z2=3"
+                         or "r1=1, r2z1=2, r2z2=2"
+    :returns: single-argument function, or None if argument invalid
+
+    """
+    affinity_str = affinity_str.strip()
+
+    if not affinity_str:
+        return lambda x: 0
+
+    priority_matchers = []
+    pieces = [s.strip() for s in affinity_str.split(',')]
+    for piece in pieces:
+        # matches r<number>=<number> or r<number>z<number>=<number>
+        match = re.match("r(\d+)(?:z(\d+))?=(\d+)$", piece)
+        if match:
+            region, zone, priority = match.groups()
+            region = int(region)
+            priority = int(priority)
+            zone = int(zone) if zone else None
+
+            matcher = {'region': region, 'priority': priority}
+            if zone is not None:
+                matcher['zone'] = zone
+            priority_matchers.append(matcher)
+        else:
+            raise ValueError("Invalid affinity value: %r" % affinity_str)
+
+    priority_matchers.sort(key=operator.itemgetter('priority'))
+
+    def keyfn(ring_node):
+        for matcher in priority_matchers:
+            if (matcher['region'] == ring_node['region']
+                and ('zone' not in matcher
+                     or matcher['zone'] == ring_node['zone'])):
+                return matcher['priority']
+        return 4294967296  # 2^32, i.e. "a big number"
+    return keyfn
+
+
 def get_remote_client(req):
     # remote host for zeus
     client = req.headers.get('x-cluster-client-ip')
@@ -1755,3 +1817,164 @@ def tpool_reraise(func, *args, **kwargs):
     if isinstance(resp, BaseException):
         raise resp
     return resp
+
+
+class ThreadPool(object):
+    BYTE = 'a'.encode('utf-8')
+
+    """
+    Perform blocking operations in background threads.
+
+    Call its methods from within greenlets to green-wait for results without
+    blocking the eventlet reactor (hopefully).
+    """
+    def __init__(self, nthreads=2):
+        self.nthreads = nthreads
+        self._run_queue = Queue()
+        self._result_queue = Queue()
+        self._threads = []
+
+        if nthreads <= 0:
+            return
+
+        # We spawn a greenthread whose job it is to pull results from the
+        # worker threads via a real Queue and send them to eventlet Events so
+        # that the calling greenthreads can be awoken.
+        #
+        # Since each OS thread has its own collection of greenthreads, it
+        # doesn't work to have the worker thread send stuff to the event, as
+        # it then notifies its own thread-local eventlet hub to wake up, which
+        # doesn't do anything to help out the actual calling greenthread over
+        # in the main thread.
+        #
+        # Thus, each worker sticks its results into a result queue and then
+        # writes a byte to a pipe, signaling the result-consuming greenlet (in
+        # the main thread) to wake up and consume results.
+        #
+        # This is all stuff that eventlet.tpool does, but that code can't have
+        # multiple instances instantiated. Since the object server uses one
+        # pool per disk, we have to reimplement this stuff.
+        _raw_rpipe, self.wpipe = os.pipe()
+        self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
+
+        for _junk in xrange(nthreads):
+            thr = stdlib_threading.Thread(
+                target=self._worker,
+                args=(self._run_queue, self._result_queue))
+            thr.daemon = True
+            thr.start()
+            self._threads.append(thr)
+
+        # This is the result-consuming greenthread that runs in the main OS
+        # thread, as described above.
+        self._consumer_coro = greenthread.spawn_n(self._consume_results,
+                                                  self._result_queue)
+
+    def _worker(self, work_queue, result_queue):
+        """
+        Pulls an item from the queue and runs it, then puts the result into
+        the result queue. Repeats forever.
+
+        :param work_queue: queue from which to pull work
+        :param result_queue: queue into which to place results
+        """
+        while True:
+            item = work_queue.get()
+            ev, func, args, kwargs = item
+            try:
+                result = func(*args, **kwargs)
+                result_queue.put((ev, True, result))
+            except BaseException, err:
+                result_queue.put((ev, False, err))
+            finally:
+                work_queue.task_done()
+                os.write(self.wpipe, self.BYTE)
+
+    def _consume_results(self, queue):
+        """
+        Runs as a greenthread in the same OS thread as callers of
+        run_in_thread().
+
+        Takes results from the worker OS threads and sends them to the waiting
+        greenthreads.
+        """
+        while True:
+            try:
+                self.rpipe.read(1)
+            except ValueError:
+                # can happen at process shutdown when pipe is closed
+                break
+
+            while True:
+                try:
+                    ev, success, result = queue.get(block=False)
+                except Empty:
+                    break
+
+                try:
+                    if success:
+                        ev.send(result)
+                    else:
+                        ev.send_exception(result)
+                finally:
+                    queue.task_done()
+
+    def run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, just calls
+        func(*args, **kwargs).
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if self.nthreads <= 0:
+            return func(*args, **kwargs)
+
+        ev = event.Event()
+        self._run_queue.put((ev, func, args, kwargs), block=False)
+
+        # blocks this greenlet (and only *this* greenlet) until the real
+        # thread calls ev.send().
+        result = ev.wait()
+        return result
+
+    def _run_in_eventlet_tpool(self, func, *args, **kwargs):
+        """
+        Really run something in an external thread, even if we haven't got any
+        threads of our own.
+        """
+        def inner():
+            try:
+                return (True, func(*args, **kwargs))
+            except (Timeout, BaseException) as err:
+                return (False, err)
+
+        success, result = tpool.execute(inner)
+        if success:
+            return result
+        else:
+            raise result
+
+    def force_run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, uses eventlet.tpool
+        to run the function. This is in contrast to run_in_thread(), which
+        will (in that case) simply execute func in the calling thread.
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if self.nthreads <= 0:
+            return self._run_in_eventlet_tpool(func, *args, **kwargs)
+        else:
+            return self.run_in_thread(func, *args, **kwargs)

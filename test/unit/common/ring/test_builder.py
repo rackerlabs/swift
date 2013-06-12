@@ -124,17 +124,20 @@ class TestRingBuilder(unittest.TestCase):
         rb = ring.RingBuilder(8, 3, 1)
         dev = {'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
                'ip': '127.0.0.1', 'port': 10000}
-        rb.add_dev(dev)
+        dev_id = rb.add_dev(dev)
         self.assertRaises(exceptions.DuplicateDeviceError, rb.add_dev, dev)
+        self.assertEqual(dev_id, 0)
         rb = ring.RingBuilder(8, 3, 1)
         #test add new dev with no id
-        rb.add_dev({'zone': 0, 'region': 1, 'weight': 1,
-                    'ip': '127.0.0.1', 'port': 6000})
+        dev_id = rb.add_dev({'zone': 0, 'region': 1, 'weight': 1,
+                             'ip': '127.0.0.1', 'port': 6000})
         self.assertEquals(rb.devs[0]['id'], 0)
+        self.assertEqual(dev_id, 0)
         #test add another dev with no id
-        rb.add_dev({'zone': 3, 'region': 2, 'weight': 1,
-                    'ip': '127.0.0.1', 'port': 6000})
+        dev_id = rb.add_dev({'zone': 3, 'region': 2, 'weight': 1,
+                             'ip': '127.0.0.1', 'port': 6000})
         self.assertEquals(rb.devs[1]['id'], 1)
+        self.assertEqual(dev_id, 1)
 
     def test_set_dev_weight(self):
         rb = ring.RingBuilder(8, 3, 1)
@@ -778,32 +781,33 @@ class TestRingBuilder(unittest.TestCase):
         for d in devs:
             rb.add_dev(d)
         rb.rebalance()
-        res = rb.search_devs('r0')
+        res = rb.search_devs({'region': 0})
         self.assertEquals(res, [devs[0], devs[1]])
-        res = rb.search_devs('r1')
+        res = rb.search_devs({'region': 1})
         self.assertEquals(res, [devs[2], devs[3]])
-        res = rb.search_devs('r1z2')
+        res = rb.search_devs({'region': 1, 'zone': 2})
         self.assertEquals(res, [devs[2]])
-        res = rb.search_devs('d1')
+        res = rb.search_devs({'id': 1})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs('z1')
+        res = rb.search_devs({'zone': 1})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs('-127.0.0.1')
+        res = rb.search_devs({'ip': '127.0.0.1'})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs('-[127.0.0.1]:10001')
+        res = rb.search_devs({'ip': '127.0.0.1', 'port': 10001})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs(':10001')
+        res = rb.search_devs({'port': 10001})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs('R127.0.0.10')
+        res = rb.search_devs({'replication_ip': '127.0.0.10'})
         self.assertEquals(res, [devs[4]])
-        res = rb.search_devs('R[127.0.0.10]:20000')
+        res = rb.search_devs({'replication_ip': '127.0.0.10',
+                              'replication_port': 20000})
         self.assertEquals(res, [devs[4]])
-        res = rb.search_devs('R:20000')
+        res = rb.search_devs({'replication_port': 20000})
         self.assertEquals(res, [devs[4]])
-        res = rb.search_devs('/sdb1')
+        res = rb.search_devs({'device': 'sdb1'})
         self.assertEquals(res, [devs[1]])
-        res = rb.search_devs('_meta1')
-        self.assertRaises(ValueError, rb.search_devs, 'OMGPONIES')
+        res = rb.search_devs({'meta': 'meta1'})
+        self.assertEquals(res, [devs[1]])
 
     def test_validate(self):
         rb = ring.RingBuilder(8, 3, 1)

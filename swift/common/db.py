@@ -70,13 +70,23 @@ class DatabaseConnectionError(sqlite3.DatabaseError):
             self.path, self.timeout, self.msg)
 
 
+class DatabaseAlreadyExists(sqlite3.DatabaseError):
+    """More friendly error messages for DB Errors."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __str__(self):
+        return 'DB %s already exists' % self.path
+
+
 class GreenDBConnection(sqlite3.Connection):
     """SQLite DB Connection handler that plays well with eventlet."""
 
     def __init__(self, *args, **kwargs):
         self.timeout = kwargs.get('timeout', BROKER_TIMEOUT)
         kwargs['timeout'] = 0
-        self.db_file = args and args[0] or '-'
+        self.db_file = args[0] if args else'-'
         sqlite3.Connection.__init__(self, *args, **kwargs)
 
     def _timeout(self, call):
@@ -247,9 +257,7 @@ class DatabaseBroker(object):
                 if os.path.exists(self.db_file):
                     # It's as if there was a "condition" where different parts
                     # of the system were "racing" each other.
-                    raise DatabaseConnectionError(
-                        self.db_file,
-                        'DB created by someone else while working?')
+                    raise DatabaseAlreadyExists(self.db_file)
                 renamer(tmp_db_file, self.db_file)
             self.conn = get_db_connection(self.db_file, self.timeout)
         else:
@@ -583,7 +591,7 @@ class DatabaseBroker(object):
             try:
                 md = conn.execute('SELECT metadata FROM %s_stat' %
                                   self.db_type).fetchone()[0]
-                md = md and json.loads(md) or {}
+                md = json.loads(md) if md else {}
                 utf8encodekeys(md)
             except sqlite3.OperationalError, err:
                 if 'no such column: metadata' not in str(err):
@@ -1108,9 +1116,20 @@ class ContainerBroker(DatabaseBroker):
                 curs.row_factory = None
 
                 if prefix is None:
+                    # A delimiter without a specified prefix is ignored
                     return [r for r in curs]
                 if not delimiter:
-                    return [r for r in curs if r[0].startswith(prefix)]
+                    if not prefix:
+                        # It is possible to have a delimiter but no prefix
+                        # specified. As above, the prefix will be set to the
+                        # empty string, so avoid performing the extra work to
+                        # check against an empty prefix.
+                        return [r for r in curs]
+                    else:
+                        return [r for r in curs if r[0].startswith(prefix)]
+
+                # We have a delimiter and a prefix (possibly empty string) to
+                # handle
                 rowcount = 0
                 for row in curs:
                     rowcount += 1
@@ -1532,9 +1551,9 @@ class AccountBroker(DatabaseBroker):
     def list_containers_iter(self, limit, marker, end_marker, prefix,
                              delimiter):
         """
-        Get a list of containerss sorted by name starting at marker onward, up
-        to limit entries.  Entries will begin with the prefix and will not
-        have the delimiter after the prefix.
+        Get a list of containers sorted by name starting at marker onward, up
+        to limit entries. Entries will begin with the prefix and will not have
+        the delimiter after the prefix.
 
         :param limit: maximum number of entries to get
         :param marker: marker query
@@ -1581,9 +1600,20 @@ class AccountBroker(DatabaseBroker):
                 curs.row_factory = None
 
                 if prefix is None:
+                    # A delimiter without a specified prefix is ignored
                     return [r for r in curs]
                 if not delimiter:
-                    return [r for r in curs if r[0].startswith(prefix)]
+                    if not prefix:
+                        # It is possible to have a delimiter but no prefix
+                        # specified. As above, the prefix will be set to the
+                        # empty string, so avoid performing the extra work to
+                        # check against an empty prefix.
+                        return [r for r in curs]
+                    else:
+                        return [r for r in curs if r[0].startswith(prefix)]
+
+                # We have a delimiter and a prefix (possibly empty string) to
+                # handle
                 rowcount = 0
                 for row in curs:
                     rowcount += 1

@@ -24,15 +24,15 @@
 #   These shenanigans are to ensure all related objects can be garbage
 # collected. We've seen objects hang around forever otherwise.
 
-import time
 from urllib import unquote
 
-from swift.common.utils import normalize_timestamp, public
+from swift.account.utils import account_listing_response, \
+    account_listing_content_type
+from swift.common.utils import public
 from swift.common.constraints import check_metadata, MAX_ACCOUNT_NAME_LENGTH
 from swift.common.http import HTTP_NOT_FOUND
-from swift.proxy.controllers.base import Controller, get_account_memcache_key
-from swift.common.swob import HTTPBadRequest, HTTPMethodNotAllowed, \
-    HTTPNoContent
+from swift.proxy.controllers.base import Controller, clear_info_cache
+from swift.common.swob import HTTPBadRequest, HTTPMethodNotAllowed
 
 
 class AccountController(Controller):
@@ -59,15 +59,11 @@ class AccountController(Controller):
             req, _('Account'), self.app.account_ring, partition,
             req.path_info.rstrip('/'))
         if resp.status_int == HTTP_NOT_FOUND and self.app.account_autocreate:
-            # Fake a response
-            headers = {'Content-Length': '0',
-                       'Accept-Ranges': 'bytes',
-                       'Content-Type': 'text/plain; charset=utf-8',
-                       'X-Timestamp': normalize_timestamp(time.time()),
-                       'X-Account-Bytes-Used': '0',
-                       'X-Account-Container-Count': '0',
-                       'X-Account-Object-Count': '0'}
-            resp = HTTPNoContent(request=req, headers=headers)
+            content_type, error = account_listing_content_type(req)
+            if error:
+                return error
+            return account_listing_response(self.account_name, req,
+                                            content_type)
         return resp
 
     @public
@@ -88,9 +84,7 @@ class AccountController(Controller):
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
         headers = self.generate_request_headers(req, transfer=True)
-        if self.app.memcache:
-            self.app.memcache.delete(
-                get_account_memcache_key(self.account_name))
+        clear_info_cache(self.app, req.environ, self.account_name)
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'PUT',
             req.path_info, [headers] * len(accounts))
@@ -110,14 +104,12 @@ class AccountController(Controller):
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
         headers = self.generate_request_headers(req, transfer=True)
-        if self.app.memcache:
-            self.app.memcache.delete(
-                get_account_memcache_key(self.account_name))
+        clear_info_cache(self.app, req.environ, self.account_name)
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'POST',
             req.path_info, [headers] * len(accounts))
         if resp.status_int == HTTP_NOT_FOUND and self.app.account_autocreate:
-            self.autocreate_account(self.account_name)
+            self.autocreate_account(req.environ, self.account_name)
             resp = self.make_requests(
                 req, self.app.account_ring, account_partition, 'POST',
                 req.path_info, [headers] * len(accounts))
@@ -138,9 +130,7 @@ class AccountController(Controller):
         account_partition, accounts = \
             self.app.account_ring.get_nodes(self.account_name)
         headers = self.generate_request_headers(req)
-        if self.app.memcache:
-            self.app.memcache.delete(
-                get_account_memcache_key(self.account_name))
+        clear_info_cache(self.app, req.environ, self.account_name)
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'DELETE',
             req.path_info, [headers] * len(accounts))

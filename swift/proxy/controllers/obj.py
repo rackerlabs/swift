@@ -53,7 +53,7 @@ from swift.proxy.controllers.base import Controller, delay_denial, \
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPRequestTimeout, \
     HTTPServerError, HTTPServiceUnavailable, Request, Response, \
-    HTTPClientDisconnect
+    HTTPClientDisconnect, HTTPNotImplemented
 
 
 def segment_listing_iter(listing):
@@ -568,7 +568,7 @@ class ObjectController(Controller):
             if error_response:
                 return error_response
             container_info = self.container_info(
-                self.account_name, self.container_name)
+                self.account_name, self.container_name, req)
             container_partition = container_info['partition']
             containers = container_info['nodes']
             req.acl = container_info['write_acl']
@@ -597,14 +597,14 @@ class ObjectController(Controller):
                     self.app.container_ring.get_nodes(
                         self.app.expiring_objects_account, delete_at_container)
             else:
-                delete_at_part = delete_at_nodes = None
+                delete_at_container = delete_at_part = delete_at_nodes = None
             partition, nodes = self.app.object_ring.get_nodes(
                 self.account_name, self.container_name, self.object_name)
             req.headers['X-Timestamp'] = normalize_timestamp(time.time())
 
             headers = self._backend_requests(
                 req, len(nodes), container_partition, containers,
-                delete_at_part, delete_at_nodes)
+                delete_at_container, delete_at_part, delete_at_nodes)
 
             resp = self.make_requests(req, self.app.object_ring, partition,
                                       'POST', req.path_info, headers)
@@ -612,7 +612,8 @@ class ObjectController(Controller):
 
     def _backend_requests(self, req, n_outgoing,
                           container_partition, containers,
-                          delete_at_partition=None, delete_at_nodes=None):
+                          delete_at_container=None, delete_at_partition=None,
+                          delete_at_nodes=None):
         headers = [self.generate_request_headers(req, additional=req.headers)
                    for _junk in range(n_outgoing)]
 
@@ -633,6 +634,7 @@ class ObjectController(Controller):
         for i, node in enumerate(delete_at_nodes or []):
             i = i % len(headers)
 
+            headers[i]['X-Delete-At-Container'] = delete_at_container
             headers[i]['X-Delete-At-Partition'] = delete_at_partition
             headers[i]['X-Delete-At-Host'] = csv_append(
                 headers[i].get('X-Delete-At-Host'),
@@ -691,7 +693,7 @@ class ObjectController(Controller):
     def PUT(self, req):
         """HTTP PUT request handler."""
         container_info = self.container_info(
-            self.account_name, self.container_name)
+            self.account_name, self.container_name, req)
         container_partition = container_info['partition']
         containers = container_info['nodes']
         req.acl = container_info['write_acl']
@@ -703,6 +705,16 @@ class ObjectController(Controller):
                 return aresp
         if not containers:
             return HTTPNotFound(request=req)
+        try:
+            ml = req.message_length()
+        except ValueError as e:
+            return HTTPBadRequest(request=req, content_type='text/plain',
+                                  body=str(e))
+        except AttributeError as e:
+            return HTTPNotImplemented(request=req, content_type='text/plain',
+                                      body=str(e))
+        if ml is not None and ml > MAX_FILE_SIZE:
+            return HTTPRequestEntityTooLarge(request=req)
         if 'x-delete-after' in req.headers:
             try:
                 x_delete_after = int(req.headers['x-delete-after'])
@@ -862,16 +874,17 @@ class ObjectController(Controller):
                 self.app.container_ring.get_nodes(
                     self.app.expiring_objects_account, delete_at_container)
         else:
-            delete_at_part = delete_at_nodes = None
+            delete_at_container = delete_at_part = delete_at_nodes = None
 
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes(self.app.object_ring, partition))
         pile = GreenPile(len(nodes))
-        chunked = req.headers.get('transfer-encoding')
+        te = req.headers.get('transfer-encoding', '')
+        chunked = ('chunked' in te)
 
         outgoing_headers = self._backend_requests(
             req, len(nodes), container_partition, containers,
-            delete_at_part, delete_at_nodes)
+            delete_at_container, delete_at_part, delete_at_nodes)
 
         for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
@@ -968,7 +981,7 @@ class ObjectController(Controller):
             self.app.logger.error(
                 _('Object servers returned %s mismatched etags'), len(etags))
             return HTTPServerError(request=req)
-        etag = len(etags) and etags.pop() or None
+        etag = etags.pop() if len(etags) else None
         while len(statuses) < len(nodes):
             statuses.append(HTTP_SERVICE_UNAVAILABLE)
             reasons.append('')
