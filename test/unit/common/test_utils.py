@@ -30,6 +30,7 @@ from textwrap import dedent
 import threading
 import time
 import unittest
+import fcntl
 from Queue import Queue, Empty
 from getpass import getuser
 from shutil import rmtree
@@ -40,7 +41,7 @@ from tempfile import TemporaryFile, NamedTemporaryFile
 from mock import MagicMock, patch
 
 from swift.common.exceptions import (Timeout, MessageTimeout,
-                                     ConnectionTimeout)
+                                     ConnectionTimeout, LockTimeout)
 from swift.common import utils
 from swift.common.swob import Response
 
@@ -1324,6 +1325,165 @@ log_name = %(yarr)s'''
                 utils.tpool_reraise,
                 MagicMock(side_effect=BaseException('test3')))
 
+    def test_lock_file(self):
+        flags = os.O_CREAT | os.O_RDWR
+        with NamedTemporaryFile(delete=False) as nt:
+            nt.write("test string")
+            nt.flush()
+            nt.close()
+            with utils.lock_file(nt.name, unlink=False) as f:
+                self.assertEqual(f.read(), "test string")
+                # we have a lock, now let's try to get a newer one
+                fd = os.open(nt.name, flags)
+                self.assertRaises(IOError, fcntl.flock, fd,
+                                  fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            with utils.lock_file(nt.name, unlink=False, append=True) as f:
+                self.assertEqual(f.read(), "test string")
+                f.seek(0)
+                f.write("\nanother string")
+                f.flush()
+                f.seek(0)
+                self.assertEqual(f.read(), "test string\nanother string")
+
+                # we have a lock, now let's try to get a newer one
+                fd = os.open(nt.name, flags)
+                self.assertRaises(IOError, fcntl.flock, fd,
+                                  fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            with utils.lock_file(nt.name, timeout=3, unlink=False) as f:
+                try:
+                    with utils.lock_file(nt.name, timeout=1, unlink=False) as f:
+                        self.assertTrue(False, "Expected LockTimeout exception")
+                except LockTimeout:
+                    pass
+
+            with utils.lock_file(nt.name, unlink=True) as f:
+                self.assertEqual(f.read(), "test string\nanother string")
+                # we have a lock, now let's try to get a newer one
+                fd = os.open(nt.name, flags)
+                self.assertRaises(IOError, fcntl.flock, fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            self.assertRaises(OSError, os.remove, nt.name)
+
+
+class TestFileLikeIter(unittest.TestCase):
+
+    def test_iter_file_iter(self):
+        in_iter = ['abc', 'de', 'fghijk', 'l']
+        chunks = []
+        for chunk in utils.FileLikeIter(in_iter):
+            chunks.append(chunk)
+        self.assertEquals(chunks, in_iter)
+
+    def test_next(self):
+        in_iter = ['abc', 'de', 'fghijk', 'l']
+        chunks = []
+        iter_file = utils.FileLikeIter(in_iter)
+        while True:
+            try:
+                chunk = iter_file.next()
+            except StopIteration:
+                break
+            chunks.append(chunk)
+        self.assertEquals(chunks, in_iter)
+
+    def test_read(self):
+        in_iter = ['abc', 'de', 'fghijk', 'l']
+        chunks = []
+        iter_file = utils.FileLikeIter(in_iter)
+        self.assertEquals(iter_file.read(), ''.join(in_iter))
+
+    def test_read_with_size(self):
+        in_iter = ['abc', 'de', 'fghijk', 'l']
+        chunks = []
+        iter_file = utils.FileLikeIter(in_iter)
+        while True:
+            chunk = iter_file.read(2)
+            if not chunk:
+                break
+            self.assertTrue(len(chunk) <= 2)
+            chunks.append(chunk)
+        self.assertEquals(''.join(chunks), ''.join(in_iter))
+
+    def test_read_with_size_zero(self):
+        # makes little sense, but file supports it, so...
+        self.assertEquals(utils.FileLikeIter('abc').read(0), '')
+
+    def test_readline(self):
+        in_iter = ['abc\n', 'd', '\nef', 'g\nh', '\nij\n\nk\n', 'trailing.']
+        lines = []
+        iter_file = utils.FileLikeIter(in_iter)
+        while True:
+            line = iter_file.readline()
+            if not line:
+                break
+            lines.append(line)
+        self.assertEquals(
+            lines,
+            [v if v == 'trailing.' else v + '\n'
+             for v in ''.join(in_iter).split('\n')])
+
+    def test_readline2(self):
+        self.assertEquals(
+            utils.FileLikeIter(['abc', 'def\n']).readline(4),
+            'abcd')
+
+    def test_readline3(self):
+        self.assertEquals(
+            utils.FileLikeIter(['a' * 1111, 'bc\ndef']).readline(),
+            ('a' * 1111) + 'bc\n')
+
+    def test_readline_with_size(self):
+
+        in_iter = ['abc\n', 'd', '\nef', 'g\nh', '\nij\n\nk\n', 'trailing.']
+        lines = []
+        iter_file = utils.FileLikeIter(in_iter)
+        while True:
+            line = iter_file.readline(2)
+            if not line:
+                break
+            lines.append(line)
+        self.assertEquals(
+            lines,
+            ['ab', 'c\n', 'd\n', 'ef', 'g\n', 'h\n', 'ij', '\n', '\n', 'k\n',
+             'tr', 'ai', 'li', 'ng', '.'])
+
+    def test_readlines(self):
+        in_iter = ['abc\n', 'd', '\nef', 'g\nh', '\nij\n\nk\n', 'trailing.']
+        lines = utils.FileLikeIter(in_iter).readlines()
+        self.assertEquals(
+            lines,
+            [v if v == 'trailing.' else v + '\n'
+             for v in ''.join(in_iter).split('\n')])
+
+    def test_readlines_with_size(self):
+        in_iter = ['abc\n', 'd', '\nef', 'g\nh', '\nij\n\nk\n', 'trailing.']
+        iter_file = utils.FileLikeIter(in_iter)
+        lists_of_lines = []
+        while True:
+            lines = iter_file.readlines(2)
+            if not lines:
+                break
+            lists_of_lines.append(lines)
+        self.assertEquals(
+            lists_of_lines,
+            [['ab'], ['c\n'], ['d\n'], ['ef'], ['g\n'], ['h\n'], ['ij'],
+             ['\n', '\n'], ['k\n'], ['tr'], ['ai'], ['li'], ['ng'], ['.']])
+
+    def test_close(self):
+        iter_file = utils.FileLikeIter('abcdef')
+        self.assertEquals(iter_file.next(), 'a')
+        iter_file.close()
+        self.assertTrue(iter_file.closed, True)
+        self.assertRaises(ValueError, iter_file.next)
+        self.assertRaises(ValueError, iter_file.read)
+        self.assertRaises(ValueError, iter_file.readline)
+        self.assertRaises(ValueError, iter_file.readlines)
+        # Just make sure repeated close calls don't raise an Exception
+        iter_file.close()
+        self.assertTrue(iter_file.closed, True)
+
 
 class TestStatsdLogging(unittest.TestCase):
     def test_get_logger_statsd_client_not_specified(self):
@@ -1544,6 +1704,50 @@ class TestAffinityKeyFunction(unittest.TestCase):
         keyfn = utils.affinity_key_function("r2=100, r2z2=50")
         ids = [n['id'] for n in sorted(self.nodes, key=keyfn)]
         self.assertEqual([3, 2, 0, 1, 4, 5, 6, 7], ids)
+
+
+class TestAffinityLocalityPredicate(unittest.TestCase):
+    def setUp(self):
+        self.nodes = [dict(id=0, region=1, zone=1),
+                      dict(id=1, region=1, zone=2),
+                      dict(id=2, region=2, zone=1),
+                      dict(id=3, region=2, zone=2),
+                      dict(id=4, region=3, zone=1),
+                      dict(id=5, region=3, zone=2),
+                      dict(id=6, region=4, zone=0),
+                      dict(id=7, region=4, zone=1)]
+
+    def test_empty(self):
+        pred = utils.affinity_locality_predicate('')
+        self.assert_(pred is None)
+
+    def test_region(self):
+        pred = utils.affinity_locality_predicate('r1')
+        self.assert_(callable(pred))
+        ids = [n['id'] for n in self.nodes if pred(n)]
+        self.assertEqual([0, 1], ids)
+
+    def test_zone(self):
+        pred = utils.affinity_locality_predicate('r1z1')
+        self.assert_(callable(pred))
+        ids = [n['id'] for n in self.nodes if pred(n)]
+        self.assertEqual([0], ids)
+
+    def test_multiple(self):
+        pred = utils.affinity_locality_predicate('r1, r3, r4z0')
+        self.assert_(callable(pred))
+        ids = [n['id'] for n in self.nodes if pred(n)]
+        self.assertEqual([0, 1, 4, 5, 6], ids)
+
+    def test_invalid(self):
+        self.assertRaises(ValueError,
+                          utils.affinity_locality_predicate, 'falafel')
+        self.assertRaises(ValueError,
+                          utils.affinity_locality_predicate, 'r8zQ')
+        self.assertRaises(ValueError,
+                          utils.affinity_locality_predicate, 'r2d2')
+        self.assertRaises(ValueError,
+                          utils.affinity_locality_predicate, 'r1z1=1')
 
 class TestGreenthreadSafeIterator(unittest.TestCase):
     def increment(self, iterable):

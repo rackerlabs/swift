@@ -303,9 +303,14 @@ class ContainerController(object):
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                   request=req)
-        if get_param(req, 'format'):
+        try:
+            query_format = get_param(req, 'format')
+        except UnicodeDecodeError:
+            return HTTPBadRequest(body='parameters not utf8',
+                                  content_type='text/plain', request=req)
+        if query_format:
             req.accept = FORMAT2CONTENT_TYPE.get(
-                get_param(req, 'format').lower(), FORMAT2CONTENT_TYPE['plain'])
+                query_format.lower(), FORMAT2CONTENT_TYPE['plain'])
         out_content_type = req.accept.best_match(
             ['text/plain', 'application/json', 'application/xml', 'text/xml'])
         if not out_content_type:
@@ -431,16 +436,15 @@ class ContainerController(object):
         elif out_content_type.endswith('/xml'):
             xml_output = []
             for (name, created_at, size, content_type, etag) in container_list:
-                # escape name and format date here
-                name = saxutils.escape(name)
                 created_at = datetime.utcfromtimestamp(
                     float(created_at)).isoformat()
                 # python isoformat() doesn't include msecs when zero
                 if len(created_at) < len("1970-01-01T00:00:00.000000"):
                     created_at += ".000000"
                 if content_type is None:
-                    xml_output.append('<subdir name="%s"><name>%s</name>'
-                                      '</subdir>' % (name, name))
+                    xml_output.append(
+                        '<subdir name=%s><name>%s</name></subdir>' %
+                        (saxutils.quoteattr(name), saxutils.escape(name)))
                 else:
                     content_type, size = self.derive_content_type_metadata(
                         content_type, size)
@@ -449,7 +453,8 @@ class ContainerController(object):
                         '<object><name>%s</name><hash>%s</hash>'
                         '<bytes>%d</bytes><content_type>%s</content_type>'
                         '<last_modified>%s</last_modified></object>' %
-                        (name, etag, size, content_type, created_at))
+                        (saxutils.escape(name), etag, size, content_type,
+                         created_at))
             container_list = ''.join([
                 '<?xml version="1.0" encoding="UTF-8"?>\n',
                 '<container name=%s>' % saxutils.quoteattr(container),

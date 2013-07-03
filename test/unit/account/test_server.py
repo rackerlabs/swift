@@ -49,6 +49,7 @@ class TestAccountController(unittest.TestCase):
             'HTTP_X_TIMESTAMP': '0'})
         resp = self.controller.DELETE(req)
         self.assertEquals(resp.status_int, 404)
+        self.assertTrue('X-Account-Status' not in resp.headers)
 
     def test_DELETE_empty(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
@@ -58,6 +59,7 @@ class TestAccountController(unittest.TestCase):
             'HTTP_X_TIMESTAMP': '1'})
         resp = self.controller.DELETE(req)
         self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_DELETE_not_empty(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
@@ -74,6 +76,7 @@ class TestAccountController(unittest.TestCase):
         resp = self.controller.DELETE(req)
         # We now allow deleting non-empty accounts
         self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_DELETE_now_empty(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
@@ -99,6 +102,7 @@ class TestAccountController(unittest.TestCase):
             'HTTP_X_TIMESTAMP': '1'})
         resp = self.controller.DELETE(req)
         self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_DELETE_invalid_partition(self):
         req = Request.blank('/sda1/./a', environ={'REQUEST_METHOD': 'DELETE',
@@ -123,9 +127,29 @@ class TestAccountController(unittest.TestCase):
         self.assertEquals(resp.status_int, 507)
 
     def test_HEAD_not_found(self):
+        # Test the case in which account does not exist (can be recreated)
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'HEAD'})
         resp = self.controller.HEAD(req)
         self.assertEquals(resp.status_int, 404)
+        self.assertTrue('X-Account-Status' not in resp.headers)
+
+        # Test the case in which account was deleted but not yet reaped
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
+                                                  'HTTP_X_TIMESTAMP': '0'})
+        self.controller.PUT(req)
+        req = Request.blank('/sda1/p/a/c1', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Put-Timestamp': '1',
+                                     'X-Delete-Timestamp': '0',
+                                     'X-Object-Count': '0',
+                                     'X-Bytes-Used': '0'})
+        self.controller.PUT(req)
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'DELETE',
+                                                  'HTTP_X_TIMESTAMP': '1'})
+        resp = self.controller.DELETE(req)
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'HEAD'})
+        resp = self.controller.HEAD(req)
+        self.assertEquals(resp.status_int, 404)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_HEAD_empty_account(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
@@ -203,6 +227,13 @@ class TestAccountController(unittest.TestCase):
         resp = self.controller.HEAD(req)
         self.assertEquals(resp.status_int, 507)
 
+    def test_HEAD_invalid_format(self):
+        format = '%D1%BD%8A9'  # invalid UTF-8; should be %E1%BD%8A9 (E -> D)
+        req = Request.blank('/sda1/p/a?format=' + format,
+                            environ={'REQUEST_METHOD': 'HEAD'})
+        resp = self.controller.HEAD(req)
+        self.assertEquals(resp.status_int, 400)
+
     def test_PUT_not_found(self):
         req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'PUT'},
             headers={'X-PUT-Timestamp': normalize_timestamp(1),
@@ -212,6 +243,7 @@ class TestAccountController(unittest.TestCase):
                      'X-Timestamp': normalize_timestamp(0)})
         resp = self.controller.PUT(req)
         self.assertEquals(resp.status_int, 404)
+        self.assertTrue('X-Account-Status' not in resp.headers)
 
     def test_PUT(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
@@ -237,6 +269,7 @@ class TestAccountController(unittest.TestCase):
         resp = self.controller.PUT(req)
         self.assertEquals(resp.status_int, 403)
         self.assertEquals(resp.body, 'Recently deleted')
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_PUT_GET_metadata(self):
         # Set metadata header
@@ -381,11 +414,32 @@ class TestAccountController(unittest.TestCase):
                                                   'HTTP_X_TIMESTAMP': '2'})
         resp = self.controller.POST(req)
         self.assertEquals(resp.status_int, 404)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_GET_not_found_plain(self):
+        # Test the case in which account does not exist (can be recreated)
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'GET'})
         resp = self.controller.GET(req)
         self.assertEquals(resp.status_int, 404)
+        self.assertTrue('X-Account-Status' not in resp.headers)
+
+        # Test the case in which account was deleted but not yet reaped
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
+                                                  'HTTP_X_TIMESTAMP': '0'})
+        self.controller.PUT(req)
+        req = Request.blank('/sda1/p/a/c1', environ={'REQUEST_METHOD': 'PUT'},
+                            headers={'X-Put-Timestamp': '1',
+                                     'X-Delete-Timestamp': '0',
+                                     'X-Object-Count': '0',
+                                     'X-Bytes-Used': '0'})
+        self.controller.PUT(req)
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'DELETE',
+                                                  'HTTP_X_TIMESTAMP': '1'})
+        resp = self.controller.DELETE(req)
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'GET'})
+        resp = self.controller.GET(req)
+        self.assertEquals(resp.status_int, 404)
+        self.assertEquals(resp.headers['X-Account-Status'], 'Deleted')
 
     def test_GET_not_found_json(self):
         req = Request.blank('/sda1/p/a?format=json',
@@ -631,6 +685,66 @@ class TestAccountController(unittest.TestCase):
         node = [n for n in container if n.nodeName == 'bytes'][0]
         self.assertEquals(node.firstChild.nodeValue, '4')
         self.assertEquals(resp.charset, 'utf-8')
+
+    def test_GET_xml_escapes_account_name(self):
+        req = Request.blank(
+            '/sda1/p/%22%27',   # "'
+            environ={'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '0'})
+        self.controller.PUT(req)
+
+        req = Request.blank(
+            '/sda1/p/%22%27?format=xml',
+            environ={'REQUEST_METHOD': 'GET', 'HTTP_X_TIMESTAMP': '1'})
+        resp = self.controller.GET(req)
+
+        dom = xml.dom.minidom.parseString(resp.body)
+        self.assertEquals(dom.firstChild.attributes['name'].value, '"\'')
+
+    def test_GET_xml_escapes_container_name(self):
+        req = Request.blank(
+            '/sda1/p/a',
+            environ={'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '0'})
+        self.controller.PUT(req)
+
+        req = Request.blank(
+            '/sda1/p/a/%22%3Cword',  # "<word
+            environ={'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '1',
+                     'HTTP_X_PUT_TIMESTAMP': '1', 'HTTP_X_OBJECT_COUNT': '0',
+                     'HTTP_X_DELETE_TIMESTAMP': '0', 'HTTP_X_BYTES_USED': '1'})
+        self.controller.PUT(req)
+
+        req = Request.blank(
+            '/sda1/p/a?format=xml',
+            environ={'REQUEST_METHOD': 'GET', 'HTTP_X_TIMESTAMP': '1'})
+        resp = self.controller.GET(req)
+        dom = xml.dom.minidom.parseString(resp.body)
+
+        self.assertEquals(
+            dom.firstChild.firstChild.nextSibling.firstChild.firstChild.data,
+            '"<word')
+
+    def test_GET_xml_escapes_container_name_as_subdir(self):
+        req = Request.blank(
+            '/sda1/p/a',
+            environ={'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '0'})
+        self.controller.PUT(req)
+
+        req = Request.blank(
+            '/sda1/p/a/%22%3Cword-test',  # "<word-test
+            environ={'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '1',
+                     'HTTP_X_PUT_TIMESTAMP': '1', 'HTTP_X_OBJECT_COUNT': '0',
+                     'HTTP_X_DELETE_TIMESTAMP': '0', 'HTTP_X_BYTES_USED': '1'})
+        self.controller.PUT(req)
+
+        req = Request.blank(
+            '/sda1/p/a?format=xml&delimiter=-',
+            environ={'REQUEST_METHOD': 'GET', 'HTTP_X_TIMESTAMP': '1'})
+        resp = self.controller.GET(req)
+        dom = xml.dom.minidom.parseString(resp.body)
+
+        self.assertEquals(
+            dom.firstChild.firstChild.nextSibling.attributes['name'].value,
+            '"<word-')
 
     def test_GET_limit_marker_plain(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',

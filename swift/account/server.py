@@ -24,7 +24,7 @@ from eventlet import Timeout
 import swift.common.db
 from swift.account.utils import account_listing_response, \
     account_listing_content_type
-from swift.common.db import AccountBroker
+from swift.common.db import AccountBroker, DatabaseConnectionError
 from swift.common.utils import get_logger, get_param, hash_path, public, \
     normalize_timestamp, storage_directory, config_true_value, \
     validate_device_partition, json, timing_stats
@@ -74,6 +74,20 @@ class AccountController(object):
         db_path = os.path.join(self.root, drive, db_dir, hsh + '.db')
         return AccountBroker(db_path, account=account, logger=self.logger)
 
+    def _deleted_response(self, broker, req, resp, body=''):
+        # We are here since either the account does not exist or
+        # it exists but marked for deletion.
+        headers = {}
+        # Try to check if account exists and is marked for deletion
+        try:
+            if broker.is_status_deleted():
+                # Account does exist and is marked for deletion
+                headers = {'X-Account-Status': 'Deleted'}
+        except DatabaseConnectionError:
+            # Account does not exist!
+            pass
+        return resp(request=req, headers=headers, charset='utf-8', body=body)
+
     @public
     @timing_stats()
     def DELETE(self, req):
@@ -92,9 +106,9 @@ class AccountController(object):
                                   content_type='text/plain')
         broker = self._get_account_broker(drive, part, account)
         if broker.is_deleted():
-            return HTTPNotFound(request=req)
+            return self._deleted_response(broker, req, HTTPNotFound)
         broker.delete_db(req.headers['x-timestamp'])
-        return HTTPNoContent(request=req)
+        return self._deleted_response(broker, req, HTTPNoContent)
 
     @public
     @timing_stats()
@@ -140,7 +154,8 @@ class AccountController(object):
                 except swift.common.db.DatabaseAlreadyExists:
                     pass
             elif broker.is_status_deleted():
-                return HTTPForbidden(request=req, body='Recently deleted')
+                return self._deleted_response(broker, req, HTTPForbidden,
+                                              body='Recently deleted')
             else:
                 created = broker.is_deleted()
                 broker.update_put_timestamp(timestamp)
@@ -167,9 +182,14 @@ class AccountController(object):
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                   request=req)
-        if get_param(req, 'format'):
+        try:
+            query_format = get_param(req, 'format')
+        except UnicodeDecodeError:
+            return HTTPBadRequest(body='parameters not utf8',
+                                  content_type='text/plain', request=req)
+        if query_format:
             req.accept = FORMAT2CONTENT_TYPE.get(
-                get_param(req, 'format').lower(), FORMAT2CONTENT_TYPE['plain'])
+                query_format.lower(), FORMAT2CONTENT_TYPE['plain'])
         out_content_type = req.accept.best_match(
             ['text/plain', 'application/json', 'application/xml', 'text/xml'])
         if not out_content_type:
@@ -180,7 +200,7 @@ class AccountController(object):
         broker.pending_timeout = 0.1
         broker.stale_reads_ok = True
         if broker.is_deleted():
-            return HTTPNotFound(request=req)
+            return self._deleted_response(broker, req, HTTPNotFound)
         info = broker.get_info()
         headers = {
             'X-Account-Container-Count': info['container_count'],
@@ -233,7 +253,7 @@ class AccountController(object):
         broker.pending_timeout = 0.1
         broker.stale_reads_ok = True
         if broker.is_deleted():
-            return HTTPNotFound(request=req)
+            return self._deleted_response(broker, req, HTTPNotFound)
         return account_listing_response(account, req, out_content_type, broker,
                                         limit, marker, end_marker, prefix,
                                         delimiter)
@@ -281,7 +301,7 @@ class AccountController(object):
             return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_account_broker(drive, part, account)
         if broker.is_deleted():
-            return HTTPNotFound(request=req)
+            return self._deleted_response(broker, req, HTTPNotFound)
         timestamp = normalize_timestamp(req.headers['x-timestamp'])
         metadata = {}
         metadata.update((key, (value, timestamp))

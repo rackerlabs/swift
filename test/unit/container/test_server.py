@@ -143,6 +143,13 @@ class TestContainerController(unittest.TestCase):
         resp = self.controller.HEAD(req)
         self.assertEquals(resp.status_int, 406)
 
+    def test_HEAD_invalid_format(self):
+        format = '%D1%BD%8A9'  # invalid UTF-8; should be %E1%BD%8A9 (E -> D)
+        req = Request.blank('/sda1/p/a/c?format=' + format,
+                            environ={'REQUEST_METHOD': 'HEAD'})
+        resp = self.controller.HEAD(req)
+        self.assertEquals(resp.status_int, 400)
+
     def test_PUT(self):
         req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'PUT',
             'HTTP_X_TIMESTAMP': '1'})
@@ -1068,6 +1075,26 @@ class TestContainerController(unittest.TestCase):
             '\n<container name="c"><subdir name="US-OK-"><name>US-OK-</name></subdir>'
             '<subdir name="US-TX-"><name>US-TX-</name></subdir>'
             '<subdir name="US-UT-"><name>US-UT-</name></subdir></container>')
+
+    def test_GET_delimiter_xml_with_quotes(self):
+        req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'PUT',
+            'HTTP_X_TIMESTAMP': '0'})
+        resp = self.controller.PUT(req)
+        req = Request.blank('/sda1/p/a/c/<\'sub\' "dir">/object',
+            environ={
+                'REQUEST_METHOD': 'PUT', 'HTTP_X_TIMESTAMP': '1',
+                'HTTP_X_CONTENT_TYPE': 'text/plain', 'HTTP_X_ETAG': 'x',
+                'HTTP_X_SIZE': 0})
+        resp = self.controller.PUT(req)
+        self.assertEquals(resp.status_int, 201)
+        req = Request.blank('/sda1/p/a/c?delimiter=/&format=xml',
+                environ={'REQUEST_METHOD': 'GET'})
+        resp = self.controller.GET(req)
+        self.assertEquals(
+            resp.body,
+            '<?xml version="1.0" encoding="UTF-8"?>\n<container name="c">'
+            '<subdir name="&lt;\'sub\' &quot;dir&quot;&gt;/">'
+            '<name>&lt;\'sub\' "dir"&gt;/</name></subdir></container>')
 
     def test_GET_path(self):
         req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'PUT',

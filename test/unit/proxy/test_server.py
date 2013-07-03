@@ -41,7 +41,7 @@ from swift.account import server as account_server
 from swift.container import server as container_server
 from swift.obj import server as object_server
 from swift.common import ring
-from swift.common.exceptions import ChunkReadTimeout, SloSegmentError
+from swift.common.exceptions import ChunkReadTimeout, SegmentError
 from swift.common.constraints import MAX_META_NAME_LENGTH, \
     MAX_META_VALUE_LENGTH, MAX_META_COUNT, MAX_META_OVERALL_SIZE, \
     MAX_FILE_SIZE, MAX_ACCOUNT_NAME_LENGTH, MAX_CONTAINER_NAME_LENGTH
@@ -350,12 +350,12 @@ class TestController(unittest.TestCase):
             # Test the internal representation in memcache
             # 'container_count' changed from 0 to None
             cache_key = get_account_memcache_key(self.account)
-            container_info = {'status': 404,
-                              'container_count': None, # internally keep None
-                              'total_object_count': None,
-                              'bytes': None,
-                              'meta': {}}
-            self.assertEquals(container_info,
+            account_info = {'status': 404,
+                            'container_count': None, # internally keep None
+                            'total_object_count': None,
+                            'bytes': None,
+                            'meta': {}}
+            self.assertEquals(account_info,
                               self.memcache.get(cache_key))
 
             set_http_connect()
@@ -765,6 +765,78 @@ class TestObjectController(unittest.TestCase):
             self.app.memcache.store = {}
             res = controller.PUT(req)
             self.assertTrue(res.status.startswith('201 '))
+
+    def test_PUT_respects_write_affinity(self):
+        written_to = []
+
+        def test_connect(ipaddr, port, device, partition, method, path,
+                         headers=None, query_string=None):
+            if path == '/a/c/o.jpg':
+                written_to.append((ipaddr, port, device))
+
+        with save_globals():
+            def is_r0(node):
+                return node['region'] == 0
+
+            self.app.object_ring.max_more_nodes = 100
+            self.app.write_affinity_is_local_fn = is_r0
+            self.app.write_affinity_node_count = lambda r: 3
+
+            controller = \
+                proxy_server.ObjectController(self.app, 'a', 'c', 'o.jpg')
+            set_http_connect(200, 200, 201, 201, 201,
+                             give_connect=test_connect)
+            req = Request.blank('/a/c/o.jpg', {})
+            req.content_length = 1
+            req.body = 'a'
+            self.app.memcache.store = {}
+            res = controller.PUT(req)
+            self.assertTrue(res.status.startswith('201 '))
+
+        self.assertEqual(3, len(written_to))
+        for ip, port, device in written_to:
+            # this is kind of a hokey test, but in FakeRing, the port is even
+            # when the region is 0, and odd when the region is 1, so this test
+            # asserts that we only wrote to nodes in region 0.
+            self.assertEqual(0, port % 2)
+
+    def test_PUT_respects_write_affinity_with_507s(self):
+        written_to = []
+
+        def test_connect(ipaddr, port, device, partition, method, path,
+                         headers=None, query_string=None):
+            if path == '/a/c/o.jpg':
+                written_to.append((ipaddr, port, device))
+
+        with save_globals():
+            def is_r0(node):
+                return node['region'] == 0
+
+            self.app.object_ring.max_more_nodes = 100
+            self.app.write_affinity_is_local_fn = is_r0
+            self.app.write_affinity_node_count = lambda r: 3
+
+            controller = \
+                proxy_server.ObjectController(self.app, 'a', 'c', 'o.jpg')
+            controller.error_limit(
+                self.app.object_ring.get_part_nodes(1)[0], 'test')
+            set_http_connect(200, 200,       # account, container
+                             201, 201, 201,  # 3 working backends
+                             give_connect=test_connect)
+            req = Request.blank('/a/c/o.jpg', {})
+            req.content_length = 1
+            req.body = 'a'
+            self.app.memcache.store = {}
+            res = controller.PUT(req)
+            self.assertTrue(res.status.startswith('201 '))
+
+        self.assertEqual(3, len(written_to))
+        # this is kind of a hokey test, but in FakeRing, the port is even when
+        # the region is 0, and odd when the region is 1, so this test asserts
+        # that we wrote to 2 nodes in region 0, then went to 1 non-r0 node.
+        self.assertEqual(0, written_to[0][1] % 2)  # it's (ip, port, device)
+        self.assertEqual(0, written_to[1][1] % 2)
+        self.assertNotEqual(0, written_to[2][1] % 2)
 
     def test_PUT_message_length_using_content_length(self):
         prolis = _test_sockets[0]
@@ -1298,7 +1370,7 @@ class TestObjectController(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertEqual(resp.content_length, 4)  # content incomplete
             self.assertEqual(resp.content_type, 'text/html')
-            self.assertRaises(SloSegmentError, lambda: resp.body)
+            self.assertRaises(SegmentError, lambda: resp.body)
             # dropped connection, exception is caught by eventlet as it is
             # iterating over response
 
@@ -1316,18 +1388,37 @@ class TestObjectController(unittest.TestCase):
                     "bytes": 2,
                     "name": "/d1/seg01",
                     "content_type": "application/octet-stream"},
-                   {"hash": "d526f1c8ef6c1e4e980e2b8471352d23",
+                   {"hash": "8681fb3ada2715c8754706ee5f23d4f8",
                     "last_modified": "2012-11-08T04:05:37.846710",
+                    "bytes": 4,
+                    "name": "/d2/sub_manifest",
+                    "content_type": "application/octet-stream"},
+                   {"hash": "419af6d362a14b7a789ba1c7e772bbae",
+                    "last_modified": "2012-11-08T04:05:37.866820",
                     "bytes": 2,
-                    "name": "/d2/seg02",
+                    "name": "/d1/seg04",
                     "content_type": "application/octet-stream"}]
+
+        sub_listing = [{"hash": "d526f1c8ef6c1e4e980e2b8471352d23",
+                        "last_modified": "2012-11-08T04:05:37.866820",
+                        "bytes": 2,
+                        "name": "/d1/seg02",
+                        "content_type": "application/octet-stream"},
+                       {"hash": "e4c8f1de1c0855c7c2be33196d3c3537",
+                        "last_modified": "2012-11-08T04:05:37.846710",
+                        "bytes": 2,
+                        "name": "/d2/seg03",
+                        "content_type": "application/octet-stream"}]
 
         response_bodies = (
             '',                           # HEAD /a
             '',                           # HEAD /a/c
             simplejson.dumps(listing),    # GET manifest
             'Aa',                         # GET seg01
-            'Bb')                         # GET seg02
+            simplejson.dumps(sub_listing),  # GET sub_manifest
+            'Bb',                         # GET seg02
+            'Cc',                         # GET seg03
+            'Dd')                         # GET seg04
         with save_globals():
             controller = proxy_server.ObjectController(
                 self.app, 'a', 'c', 'manifest')
@@ -1347,26 +1438,37 @@ class TestObjectController(unittest.TestCase):
                 200,    # HEAD /a/c
                 200,    # GET listing1
                 200,    # GET seg01
+                200,    # GET sub listing1
                 200,    # GET seg02
-                headers=[{}, {}, slob_headers, {}, slob_headers],
+                200,    # GET seg03
+                200,    # GET seg04
+                headers=[{}, {}, slob_headers, {}, slob_headers, {}, {}, {}],
                 body_iter=response_bodies,
                 give_connect=capture_requested_paths)
             req = Request.blank('/a/c/manifest')
             resp = controller.GET(req)
             self.assertEqual(resp.status_int, 200)
-            self.assertEqual(resp.content_length, 4)  # content incomplete
+            self.assertEqual(resp.content_length, 8)
             self.assertEqual(resp.content_type, 'text/html')
-            self.assertRaises(SloSegmentError, lambda: resp.body)
-            # dropped connection, exception is caught by eventlet as it is
-            # iterating over response
 
+            self.assertEqual(
+                requested,
+                [['HEAD', '/a', {}],
+                 ['HEAD', '/a/c', {}],
+                 ['GET', '/a/c/manifest', {}]])
+            # iterating over body will retrieve manifest and sub manifest's
+            # objects
+            self.assertEqual(resp.body, 'AaBbCcDd')
             self.assertEqual(
                 requested,
                 [['HEAD', '/a', {}],
                  ['HEAD', '/a/c', {}],
                  ['GET', '/a/c/manifest', {}],
                  ['GET', '/a/d1/seg01', {}],
-                 ['GET', '/a/d2/seg02', {}]])
+                 ['GET', '/a/d2/sub_manifest', {}],
+                 ['GET', '/a/d1/seg02', {}],
+                 ['GET', '/a/d2/seg03', {}],
+                 ['GET', '/a/d1/seg04', {}]])
 
     def test_GET_bad_404_manifest_slo(self):
         listing = [{"hash": "98568d540134639be4655198a36614a4",
@@ -1418,7 +1520,7 @@ class TestObjectController(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertEqual(resp.content_length, 6)  # content incomplete
             self.assertEqual(resp.content_type, 'text/html')
-            self.assertRaises(SloSegmentError, lambda: resp.body)
+            self.assertRaises(SegmentError, lambda: resp.body)
             # dropped connection, exception is caught by eventlet as it is
             # iterating over response
 
@@ -2187,6 +2289,35 @@ class TestObjectController(unittest.TestCase):
                 second_nodes.append(node)
             self.assertEquals(len(first_nodes), 6)
             self.assertEquals(len(second_nodes), 7)
+
+    def test_iter_nodes_with_custom_node_iter(self):
+        controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
+        node_list = [dict(id=n) for n in xrange(10)]
+        with nested(
+                mock.patch.object(self.app, 'sort_nodes', lambda n: n),
+                mock.patch.object(self.app, 'request_node_count',
+                                  lambda r: 3)):
+            got_nodes = list(controller.iter_nodes(self.app.object_ring, 0,
+                                                   node_iter=iter(node_list)))
+        self.assertEqual(node_list[:3], got_nodes)
+
+        with nested(
+                mock.patch.object(self.app, 'sort_nodes', lambda n: n),
+                mock.patch.object(self.app, 'request_node_count',
+                                  lambda r: 1000000)):
+            got_nodes = list(controller.iter_nodes(self.app.object_ring, 0,
+                                                   node_iter=iter(node_list)))
+        self.assertEqual(node_list, got_nodes)
+
+    def test_best_response_sets_headers(self):
+        controller = proxy_server.ObjectController(self.app, 'account',
+                                                   'container', 'object')
+        req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'GET'})
+        resp = controller.best_response(req, [200] * 3, ['OK'] * 3, [''] * 3,
+                                        'Object', headers=[{'X-Test': '1'},
+                                                           {'X-Test': '2'},
+                                                           {'X-Test': '3'}])
+        self.assertEquals(resp.headers['X-Test'], '1')
 
     def test_best_response_sets_etag(self):
         controller = proxy_server.ObjectController(self.app, 'account',
@@ -5975,13 +6106,14 @@ class FakeObjectController(object):
         self.node_timeout = 1
         self.rate_limit_after_segment = 3
         self.rate_limit_segments_per_sec = 2
+        self.GETorHEAD_base_args = []
 
     def exception(self, *args):
         self.exception_args = args
         self.exception_info = sys.exc_info()
 
     def GETorHEAD_base(self, *args):
-        self.GETorHEAD_base_args = args
+        self.GETorHEAD_base_args.append(args)
         req = args[0]
         path = args[4]
         body = data = path[-1] * int(path[-1])
@@ -6032,7 +6164,8 @@ class TestSegmentedIterable(unittest.TestCase):
         segit = SegmentedIterable(self.controller, 'lc', [{'name':
                                   'o1'}])
         segit._load_next_segment()
-        self.assertEquals(self.controller.GETorHEAD_base_args[4], '/a/lc/o1')
+        self.assertEquals(
+            self.controller.GETorHEAD_base_args[0][4], '/a/lc/o1')
         data = ''.join(segit.segment_iter)
         self.assertEquals(data, '1')
 
@@ -6040,11 +6173,13 @@ class TestSegmentedIterable(unittest.TestCase):
         segit = SegmentedIterable(self.controller, 'lc', [{'name':
                                   'o1'}, {'name': 'o2'}])
         segit._load_next_segment()
-        self.assertEquals(self.controller.GETorHEAD_base_args[4], '/a/lc/o1')
+        self.assertEquals(
+            self.controller.GETorHEAD_base_args[-1][4], '/a/lc/o1')
         data = ''.join(segit.segment_iter)
         self.assertEquals(data, '1')
         segit._load_next_segment()
-        self.assertEquals(self.controller.GETorHEAD_base_args[4], '/a/lc/o2')
+        self.assertEquals(
+            self.controller.GETorHEAD_base_args[-1][4], '/a/lc/o2')
         data = ''.join(segit.segment_iter)
         self.assertEquals(data, '22')
 
@@ -6066,19 +6201,19 @@ class TestSegmentedIterable(unittest.TestCase):
             for _ in xrange(3):
                 segit._load_next_segment()
             self.assertEquals([], sleep_calls)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o3')
 
             # Loading of next (4th) segment starts rate-limiting.
             segit._load_next_segment()
             self.assertAlmostEqual(0.5, sleep_calls[0], places=2)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o4')
 
             sleep_calls = []
             segit._load_next_segment()
             self.assertAlmostEqual(0.5, sleep_calls[0], places=2)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o5')
         finally:
             swift.proxy.controllers.obj.sleep = orig_sleep
@@ -6107,19 +6242,19 @@ class TestSegmentedIterable(unittest.TestCase):
                 # o0 and o1 were skipped.
                 segit._load_next_segment()
             self.assertEquals([], sleep_calls)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o4')
 
             # Loading of next (5th) segment starts rate-limiting.
             segit._load_next_segment()
             self.assertAlmostEqual(0.5, sleep_calls[0], places=2)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o5')
 
             sleep_calls = []
             segit._load_next_segment()
             self.assertAlmostEqual(0.5, sleep_calls[0], places=2)
-            self.assertEquals(self.controller.GETorHEAD_base_args[4],
+            self.assertEquals(self.controller.GETorHEAD_base_args[-1][4],
                               '/a/lc/o6')
         finally:
             swift.proxy.controllers.obj.sleep = orig_sleep
@@ -6130,22 +6265,44 @@ class TestSegmentedIterable(unittest.TestCase):
         segit.ratelimit_index = 0
         segit.listing.next()
         segit._load_next_segment()
-        self.assertEquals(self.controller.GETorHEAD_base_args[4], '/a/lc/o2')
+        self.assertEquals(self.controller.GETorHEAD_base_args[-1][4], '/a/lc/o2')
         data = ''.join(segit.segment_iter)
         self.assertEquals(data, '22')
 
     def test_load_next_segment_with_seek(self):
-        segit = SegmentedIterable(self.controller, 'lc', [{'name':
-                                  'o1'}, {'name': 'o2'}])
+        segit = SegmentedIterable(self.controller, 'lc',
+                                  [{'name': 'o1', 'bytes': 1},
+                                   {'name': 'o2', 'bytes': 2}])
         segit.ratelimit_index = 0
         segit.listing.next()
         segit.seek = 1
         segit._load_next_segment()
-        self.assertEquals(self.controller.GETorHEAD_base_args[4], '/a/lc/o2')
-        self.assertEquals(str(self.controller.GETorHEAD_base_args[0].range),
+        self.assertEquals(self.controller.GETorHEAD_base_args[-1][4], '/a/lc/o2')
+        self.assertEquals(str(self.controller.GETorHEAD_base_args[-1][0].range),
                           'bytes=1-')
         data = ''.join(segit.segment_iter)
         self.assertEquals(data, '2')
+
+    def test_fetching_only_what_you_need(self):
+        segit = SegmentedIterable(self.controller, 'lc',
+                                  [{'name': 'o7', 'bytes': 7},
+                                   {'name': 'o8', 'bytes': 8},
+                                   {'name': 'o9', 'bytes': 9}])
+
+        body = ''.join(segit.app_iter_range(10, 20))
+        self.assertEqual('8888899999', body)
+
+        GoH_args = self.controller.GETorHEAD_base_args
+        self.assertEquals(2, len(GoH_args))
+
+        # Either one is fine, as they both indicate "from byte 3 to (the last)
+        # byte 8".
+        self.assert_(str(GoH_args[0][0].range) in ['bytes=3-', 'bytes=3-8'])
+
+        # This one must ask only for the bytes it needs; otherwise we waste
+        # bandwidth pulling bytes from the object server and then throwing
+        # them out
+        self.assertEquals(str(GoH_args[1][0].range), 'bytes=0-4')
 
     def test_load_next_segment_with_get_error(self):
 

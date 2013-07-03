@@ -71,11 +71,6 @@ X-Account-Meta-Temp-URL-Key-2. Signatures are checked against both keys, if
 present. This is to allow for key rotation without invalidating all existing
 temporary URLs.
 
-Note that changing either X-Account-Meta-Temp-URL-Key or
-X-Account-Meta-Temp-URL-Key-2 will invalidate any previously generated
-temporary URLs signed with that key within 60 seconds (the memcache lifetime
-for the key). It is not instantaneous.
-
 With GET TempURLs, a Content-Disposition header will be set on the
 response so that browsers will interpret this as a file attachment to
 be saved. The filename chosen is based on the object name, but you
@@ -97,12 +92,11 @@ __all__ = ['TempURL', 'filter_factory',
 import hmac
 from hashlib import sha1
 from os.path import basename
-from StringIO import StringIO
 from time import time
 from urllib import urlencode
 from urlparse import parse_qs
 
-from swift.common.wsgi import make_pre_authed_env
+from swift.proxy.controllers.base import get_account_info
 from swift.common.swob import HeaderKeyDict
 
 
@@ -127,6 +121,21 @@ DEFAULT_OUTGOING_REMOVE_HEADERS = 'x-object-meta-*'
 #: whitespace delimited list of header names and names can optionally end with
 #: '*' to indicate a prefix match.
 DEFAULT_OUTGOING_ALLOW_HEADERS = 'x-object-meta-public-*'
+
+
+def get_tempurl_keys_from_metadata(meta):
+    """
+    Extracts the tempurl keys from metadata.
+
+    :param meta: account metadata
+    :returns: list of keys found (possibly empty if no keys set)
+
+    Example:
+      meta = get_account_info(...)['meta']
+      keys = get_tempurl_keys_from_metadata(meta)
+    """
+    return [value for key, value in meta.iteritems()
+            if key.lower() in ('temp-url-key', 'temp-url-key-2')]
 
 
 class TempURL(object):
@@ -359,34 +368,8 @@ class TempURL(object):
         :returns: [X-Account-Meta-Temp-URL-Key str value if set,
                    X-Account-Meta-Temp-URL-Key-2 str value if set]
         """
-        keys = None
-        memcache = env.get('swift.cache')
-        memcache_hash_key = 'temp-url-keys/%s' % account
-        if memcache:
-            keys = memcache.get(memcache_hash_key)
-        if keys is None:
-            newenv = make_pre_authed_env(env, 'HEAD', '/v1/' + account,
-                                         self.agent, swift_source='TU')
-            newenv['CONTENT_LENGTH'] = '0'
-            newenv['wsgi.input'] = StringIO('')
-            keys = []
-
-            def _start_response(status, response_headers, exc_info=None):
-                for h, v in response_headers:
-                    if h.lower() == 'x-account-meta-temp-url-key':
-                        keys.append(v)
-                    elif h.lower() == 'x-account-meta-temp-url-key-2':
-                        keys.append(v)
-
-            i = iter(self.app(newenv, _start_response))
-            try:
-                i.next()
-            except StopIteration:
-                pass
-            if memcache:
-                timeout = 60 if keys else 6
-                memcache.set(memcache_hash_key, keys, time=timeout)
-        return keys
+        account_info = get_account_info(env, self.app, swift_source='TU')
+        return get_tempurl_keys_from_metadata(account_info['meta'])
 
     def _get_hmacs(self, env, expires, keys, request_method=None):
         """
