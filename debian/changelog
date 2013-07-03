@@ -1,3 +1,92 @@
+swift (1.9.1~rax1) lucid; urgency=low
+
+   * 7bb1d07 Merge "Record some simple object stats in the object auditor"
+   * 043bfb7 Record some simple object stats in the object auditor
+   * bc35717 Merge "small cleanup to associated projects page"
+   * 9b2ee07 small cleanup to associated projects page
+   * a24c89e adding copyright notice
+   * 4a90414 Merge "docfix apache2 now supports client chunked encodin"
+   * 1f7c86e Merge "Update docs to use default XFS inode size"
+   * 581f7f5 Update docs to use default XFS inode size
+   * e759dad Merge "Add test for swift.common.utils.lock_file"
+   * 68cb910 docfix apache2 now supports client chunked encodin
+   * 0e60297 Add test for swift.common.utils.lock_file
+   * c6e5372 Merge "Make formpost work with multiple tempurl keys."
+   * 2a91768 Merge "TempAuth: don't return 401/403 if .r without .rlistings"
+   * 53908a1 Merge "Allow SLOs to be made up of other SLOs"
+   * bd00f0c Make formpost work with multiple tempurl keys.
+   * 9f942b1 Allow SLOs to be made up of other SLOs
+   * b012fd9 Change ring partition size for SAIO
+   * 1620f4e Merge "Adding unit tests for direct client"
+   * 8ff374d TempAuth: don't return 401/403 if .r without .rlistings
+   * 66a0817 Merge "Remove dead code and tests for staticweb."
+   * 882078d Merge "version bump to 1.9.1"
+   * fefdf5f Merge "updated changelog and authors update for 1.9.0 release"
+   * 8b4520a Remove dead code and tests for staticweb.
+   * 68fc163 version bump to 1.9.1
+   * 8226761 Deleted account respond as non existing accounts
+   * abda080 updated changelog and authors update for 1.9.0 release
+   * edf4068 Merge "Local write affinity for object PUT requests."
+   * 83bdd0b Merge "Refactor DiskFile instantiation in object server."
+   * a42e87a Merge "Add sample rsyslog.conf."
+   * 9ac0b14 Merge "Fix swift-dispersion-report."
+   * 9fc55ee Add sample rsyslog.conf.
+   * 6768d5b Use object name from request in bulk Errors
+   * 57d4e6e Fix swift-dispersion-report.
+   * d9f2a76 Local write affinity for object PUT requests.
+   * 13347af Merge "Improve swift's keystoneauth ACL support"
+   * 054ffbe Merge "Stop getting useless bytes on manifest Range requests."
+   * 60388c9 Adding unit tests for direct client
+   * e8e6bff Clean up some remnants of StaticWeb's and TempURL's custom caching.
+   * 75660a1 Merge "bulk response Content-Type does not match request Accept header"
+   * 461b88b Merge "Added utils.FileLikeIter"
+   * 2412f6c Merge "Add "normal", optparse-style options to swift-ring-builder add."
+   * 4eda025 Merge "Add example Apache config files"
+   * d5736ec Merge "python3: Introduce py33 to tox.ini"
+   * cc66092 Merge "use get_container_info for staticweb"
+   * e872e54 Add example Apache config files
+   * ff02537 Merge "update .gitignore"
+   * c19daab Merge "Add max_header_size to swift.conf-sample and relative UT"
+   * 2a9da16 update .gitignore
+   * e499b91 use get_container_info for staticweb
+   * 1b930dd version bump to 1.9.0 to reflect current dev target
+   * 527dc23 Merge "Make TempURL more cache-efficient."
+   * 9d0a0e8 Merge "Swift tests for unicode headers"
+   * 440f508 Merge "Optional TCP_KEEPIDLE in unit tests"
+   * 2e155e5 Make TempURL more cache-efficient.
+   * 6a51c5e Merge "Add branch coverage reporting"
+   * 0a77f04 Added utils.FileLikeIter
+   * 5c8785a Add max_header_size to swift.conf-sample and relative UT
+   * ad24cde bulk response Content-Type does not match request Accept header
+   * 60c1bc5 Merge "Treat directory objects as not found"
+   * 2a67003 Optional TCP_KEEPIDLE in unit tests
+   * f99cf2d Merge "Fixed some minor doc building errors"
+   * 0d24b3e Merge "More xml fixes"
+   * a30dbf1 Merge "Fix 503 on account/container HEAD w/invalid format."
+   * e9d1199 More xml fixes
+   * 59a8aae Merge "Fix ring validate with device prior to rebalance."
+   * 88d3d12 Merge "Better escaping for GET /v1/a?format=xml."
+   * cbe9073 Fixed some minor doc building errors
+   * 92d7ead Better escaping for GET /v1/a?format=xml.
+   * 11aaaf1 Remove Lucid/ppa instructions from SAIO guide
+   * 7757144 Merge "Added logging of x-delete-at values"
+   * 8f9b135 Checked user input in XML responses.
+   * 04a1896 Added logging of x-delete-at values
+   * 6001b45 Merge "Fix formpost with queries without user_agent."
+   * cc4589c Merge "Improve SAIO deploy document."
+   * b545fbe Merge "Add UT for checking special chars in object name"
+   * 58a095b Improve swift's keystoneauth ACL support
+   * 90c422d Improve SAIO deploy document.
+   * 6d32d94 Refactor DiskFile instantiation in object server.
+   * aff39d7 Fix 503 on account/container HEAD w/invalid format.
+   * 92b045e releasing 1.8.1~rax6
+   * 0ac352a Merge branch 'master' into rackspace_production
+   * d462393 Fix formpost with queries without user_agent.
+   * 1384171 Merge "Fix functional tests with keystone."
+   * abef11f Merge "get_info - removes duplicate code (Take 3)"
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 3 July 2013 13:27:00 +0000
+
 swift (1.8.1~rax6) lucid; urgency=low
 
   * 752647a Fix functional tests with keystone.
