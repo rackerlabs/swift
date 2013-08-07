@@ -18,6 +18,7 @@ import os
 import signal
 import sys
 import time
+from gettext import gettext as _
 from random import random
 
 from eventlet import patcher, Timeout
@@ -107,7 +108,7 @@ class ObjectUpdater(Daemon):
                 time.sleep(self.interval - elapsed)
 
     def run_once(self, *args, **kwargs):
-        """Run the updater once"""
+        """Run the updater once."""
         self.logger.info(_('Begin object update single threaded sweep'))
         begin = time.time()
         self.successes = 0

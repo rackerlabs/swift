@@ -6,6 +6,8 @@ swift-recon-cron.py
 import os
 import sys
 from ConfigParser import ConfigParser
+from gettext import gettext as _
+
 from swift.common.utils import get_logger, dump_recon_cache
 
 
@@ -43,7 +45,7 @@ def main():
     try:
         os.mkdir(lock_dir)
     except OSError as e:
-        logger.critical(_(str(e)))
+        logger.critical(str(e))
         print str(e)
         sys.exit(1)
     try:

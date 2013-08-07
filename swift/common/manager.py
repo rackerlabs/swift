@@ -22,6 +22,7 @@ import signal
 import time
 import subprocess
 import re
+from gettext import gettext as _
 
 from swift.common.utils import search_tree, remove_file, write_file
 
@@ -611,7 +612,7 @@ class Server():
                 pid = self.spawn(conf_file, **kwargs)
             except OSError, e:
                 if e.errno == errno.ENOENT:
-                    # TODO: should I check if self.cmd exists earlier?
+                    #TODO(clayg): should I check if self.cmd exists earlier?
                     print _("%s does not exist") % self.cmd
                     break
             pids[pid] = conf_file

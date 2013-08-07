@@ -14,6 +14,8 @@
 # limitations under the License.
 
 import unittest
+import mock
+
 from test.unit import MockTrue
 
 from swift.common.swob import HTTPBadRequest, Request
@@ -23,6 +25,13 @@ from swift.common import constraints
 
 
 class TestConstraints(unittest.TestCase):
+
+    def assertIn(self, member, container, msg=None):
+        """Copied from 2.7"""
+        if member not in container:
+            standardMsg = '%s not found in %s' % (safe_repr(member),
+                                                  safe_repr(container))
+            self.fail(self._formatMessage(msg, standardMsg))
 
     def test_check_metadata_empty(self):
         headers = {}
@@ -48,6 +57,9 @@ class TestConstraints(unittest.TestCase):
         headers = {'X-Object-Meta-%s' % name: 'v'}
         self.assertEquals(constraints.check_metadata(Request.blank('/',
             headers=headers), 'object').status_int, HTTP_BAD_REQUEST)
+        self.assertIn(('X-Object-Meta-%s' % name).lower(),
+            constraints.check_metadata(Request.blank('/', headers=headers),
+                                                     'object').body.lower())
 
     def test_check_metadata_value_length(self):
         value = 'a' * constraints.MAX_META_VALUE_LENGTH
@@ -58,6 +70,12 @@ class TestConstraints(unittest.TestCase):
         headers = {'X-Object-Meta-Name': value}
         self.assertEquals(constraints.check_metadata(Request.blank('/',
             headers=headers), 'object').status_int, HTTP_BAD_REQUEST)
+        self.assertIn('x-object-meta-name',
+            constraints.check_metadata(Request.blank('/', headers=headers),
+                                                     'object').body.lower())
+        self.assertIn(str(constraints.MAX_META_VALUE_LENGTH),
+            constraints.check_metadata(Request.blank('/', headers=headers),
+                                                     'object').body)
 
     def test_check_metadata_count(self):
         headers = {}
@@ -170,14 +188,13 @@ class TestConstraints(unittest.TestCase):
 
     def test_check_mount(self):
         self.assertFalse(constraints.check_mount('', ''))
-        constraints.os = MockTrue()  # mock os module
-        self.assertTrue(constraints.check_mount('/srv', '1'))
-        self.assertTrue(constraints.check_mount('/srv', 'foo-bar'))
-        self.assertTrue(constraints.check_mount('/srv', '003ed03c-242a-4b2f-bee9-395f801d1699'))
-        self.assertFalse(constraints.check_mount('/srv', 'foo bar'))
-        self.assertFalse(constraints.check_mount('/srv', 'foo/bar'))
-        self.assertFalse(constraints.check_mount('/srv', 'foo?bar'))
-        reload(constraints)  # put it back
+        with mock.patch("swift.common.constraints.ismount", MockTrue()):
+            self.assertTrue(constraints.check_mount('/srv', '1'))
+            self.assertTrue(constraints.check_mount('/srv', 'foo-bar'))
+            self.assertTrue(constraints.check_mount('/srv', '003ed03c-242a-4b2f-bee9-395f801d1699'))
+            self.assertFalse(constraints.check_mount('/srv', 'foo bar'))
+            self.assertFalse(constraints.check_mount('/srv', 'foo/bar'))
+            self.assertFalse(constraints.check_mount('/srv', 'foo?bar'))
 
     def test_check_float(self):
         self.assertFalse(constraints.check_float(''))
@@ -209,6 +226,8 @@ class TestConstraints(unittest.TestCase):
                      'ab' * constraints.MAX_HEADER_SIZE})
         self.assertEquals(constraints.check_metadata(req, 'object').status_int,
                           HTTP_BAD_REQUEST)
+        self.assertIn('x-object-meta-hello', constraints.check_metadata(req,
+                      'object').body.lower())
 
     def test_validate_constraints(self):
         c = constraints
@@ -216,6 +235,7 @@ class TestConstraints(unittest.TestCase):
         self.assertTrue(c.MAX_META_OVERALL_SIZE > c.MAX_META_VALUE_LENGTH)
         self.assertTrue(c.MAX_HEADER_SIZE > c.MAX_META_NAME_LENGTH)
         self.assertTrue(c.MAX_HEADER_SIZE > c.MAX_META_VALUE_LENGTH)
+
 
 if __name__ == '__main__':
     unittest.main()

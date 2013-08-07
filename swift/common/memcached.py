@@ -49,6 +49,7 @@ import logging
 import socket
 import time
 from bisect import bisect
+from gettext import gettext as _
 from hashlib import md5
 
 from swift.common.utils import json
@@ -178,7 +179,7 @@ class MemcacheRing(object):
                         server, e, action='connecting', sock=sock)
 
     def _return_conn(self, server, fp, sock):
-        """ Returns a server connection to the pool """
+        """Returns a server connection to the pool."""
         self._client_cache[server].append((fp, sock))
 
     def set(self, key, value, serialize=True, timeout=0, time=0,
