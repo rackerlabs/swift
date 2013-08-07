@@ -1,3 +1,75 @@
+swift (1.9.2~rax1) lucid; urgency=low
+
+   * 1fc2742 version bump to reflect current dev target
+   * bc998f8 CHANGELOG and AUTHORS and .mailmap updates for 1.9.1
+   * 6b9806e Fix handling of DELETE obj reqs with old timestamp
+   * 0e96911 Increase test coverage of swift/common/db.py
+   * 7f1aa9d Allow dispersion tools to use keystone server with insecure certificate
+   * 2690a4e Fix sphinx error in swift.common.utils
+   * 657a0e4 Add swift-basicauth and better-staticweb to associated projects.
+   * 6895bb6 Correct misspell in comments
+   * d819354 Just a tiny doc fix for a Sphinx warning
+   * f242311 Make pending_timeout an argument of __init__
+   * 6c36194 give value [] if disallowed_metadata_keys is None
+   * e448b2f Fake http_connect in test_replicator test
+   * 3035a93 Tell swift to figure out content type
+   * 47e34cf fix(gitignore) : ignore *.egg and *.egg-info
+   * 22e7cbc When iterating over a range of a file, always close it
+   * 1e3ad44 Merge object base module into diskfile.
+   * eb99e8f Obscure the X-Auth-Token in proxy log
+   * f9e73a0 Eliminate can_delete_db
+   * 53345da some container serialization cleanup
+   * be688c3 Encode unicode from JSON before using it as a string.
+   * 0f3b041 Removed unnecessary monkeypatching of __builtin__
+   * 750684f add utf-8 charset to multipart-manifest=get resp
+   * db2a478 Unify _commit_puts for accounts and containers
+   * 934cd9d Ignore coverage HTML directory and MANIFEST.
+   * 741c316 fix name 'recon_container' to 'rcache'
+   * 0508842 Fix incorrect status handling at staticweb
+   * df7fc96 Catch swob responses that are raised.
+   * eb0629f Make sure users can't remove their account quotas
+   * ff5a6d0 Corrected many style violations in the tests.
+   * b7187ce Return name of header larger than MAX_HEADER_SIZE
+   * c7a7999 log return value before arguments when rsync error
+   * adbe869 Remove duplicated code in direct_client.
+   * f2c3e1a Fix bulk's unit tests on Mac OS.
+   * d2dd3e5 Configuration options for error regex and log file in the config now
+   * 5c1a787 Unified format of boolean params in conf files
+   * 63061e3 Add notes for /srv/node in swift-object-info
+   * 13bbe4b fix unit tests in 2.6 by using closing(GzipFile)
+   * 6384b19 Ensure that files are always closed explicitly.
+   * 0e3103c Corrected a number of style violations in the tests.
+   * 1804b13 Tempurl md use of split_path in _get_account
+   * fc293a7 Move the mount checking into DiskFile constructor
+   * 8faa21d Remove unused exceptions
+   * e0535f9 Remove extra lstat() calls from check_mount
+   * b84afc5 Make stale_reads_ok an argument of __init__
+   * c1f8f26 Ensure that files in tests are closed.
+   * 7cd01a6 Add 'Z' into isoformat for UTC time
+   * 86cbcec remove assert synta
+   * 0fdad0d Close SQLite cursors when creating functions.
+   * 91e7e87 Accept valid Accept headers in swob.
+   * 3b1ee1f Remove list comprehension where the result is unused.
+   * 1f43ee0 Add option to make probetests more brittle
+   * de3acec Set default wsgi workers to cpu_count
+   * 710e4a0 Ensure that files are always closed in the tests.
+   * c9de9f2 Forklift the DiskFile interface into it's own module
+   * 53f5026 Fix the way possibly_quarantine reraises an exception
+   * 89ccd95 Add bulk middleware to proxy-server.conf-sample
+   * 9480ff8 Refactor auditors to rely on expected gen names
+   * bc99f58 Fix unit tests to properly marked deleted files
+   * 18a0813 Add documentation about flake8+hacking.
+   * 27dc73f Fix make_pre_authed_request function to not fail when path arg is None.
+   * 8aba2d6 Start using Hacking
+   * bc08215 Move replication allow method to decorators
+   * e7b5e9d make internal client metadata methods return dicts with lower case keys
+   * 5449155 Allow floating point value for dispersion_coverage
+   * 6f57b06 Make keystoneauth reseller_prefix check for _
+   * 151313b Fix flaky test.
+   * 6f722f7 Don't allow users to delete their own account.
+   * 477a468 releasing 1.9.1~rax1
+   * fcfb801 Revert "docfix apache2 now supports client chunked encodin"
+
 swift (1.9.1~rax1) lucid; urgency=low
 
    * 7bb1d07 Merge "Record some simple object stats in the object auditor"
