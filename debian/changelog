@@ -70,6 +70,8 @@ swift (1.9.2~rax1) lucid; urgency=low
    * 477a468 releasing 1.9.1~rax1
    * fcfb801 Revert "docfix apache2 now supports client chunked encodin"
 
+ -- Chuck Thier <chuck.thier@rackspace.com>  Wed, 7 August 2013 19:04:00 +0000
+
 swift (1.9.1~rax1) lucid; urgency=low
 
    * 7bb1d07 Merge "Record some simple object stats in the object auditor"
