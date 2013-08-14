@@ -1,5 +1,13 @@
 swift (1.9.2~rax1) lucid; urgency=low
 
+   * 8a84998 memcache timeout parameter bug in get_info
+   * de34683 Rename loop var i in sub loop branch
+   * 72d6f6d Removed monkeypatching of __del__ in tests
+   * c272241 Always close HTTP connections in the container updater.
+   * 716ad3e Add libcloud to associated_projects.
+   * e8a593f added a couple of java libraries to associated projects
+   * 5a785aa Add missing copyright license headers
+   * 2e80559 Preparing for 1.9.2~rax1 packages (forgot email in changelog)
    * 1fc2742 version bump to reflect current dev target
    * bc998f8 CHANGELOG and AUTHORS and .mailmap updates for 1.9.1
    * 6b9806e Fix handling of DELETE obj reqs with old timestamp
