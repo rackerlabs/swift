@@ -3,7 +3,8 @@
 #DEBHELPER#
 
 if ! getent passwd swift > /dev/null ; then
-  adduser --system --quiet --disabled-login --disabled-password --no-create-home --group swift
+  addgroup --system --quiet --gid 444 swift
+  adduser --system --quiet --disabled-login --disabled-password --no-create-home --uid 444 --gid 444 swift
 fi
 
 usermod -G adm swift
