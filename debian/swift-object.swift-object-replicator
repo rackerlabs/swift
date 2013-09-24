@@ -9,5 +9,22 @@
 # Description:       Object replicator server for swift.
 ### END INIT INFO
 
-/usr/bin/swift-init object-replicator $1
 
+if [ $1 = "stop" ] || [ $1 = "restart" ];  then
+    /usr/bin/swift-init object-replicator stop
+    pgrep -u swift -f /usr/bin/swift-object-replicator > /dev/null
+    if [ $? -eq 0 ]; then
+        echo "Process still running, attempting to kill..."
+        pkill -SIGKILL -u swift -f /usr/bin/swift-object-replicator
+        sleep 1
+        pgrep -u swift -f /usr/bin/swift-object-replicator > /dev/null
+        if [ $? -eq 0 ]; then
+            echo "Process still running! Exiting."
+        fi
+    fi
+    if [ $1 = "restart" ]; then
+        /usr/bin/swift-init object-replicator start
+    fi
+else
+    /usr/bin/swift-init object-replicator $1
+fi
