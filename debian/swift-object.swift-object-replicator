@@ -10,7 +10,7 @@
 ### END INIT INFO
 
 
-if [ $1 = "stop" ] || [ $1 == "restart" ];  then
+if [ $1 = "stop" ] || [ $1 = "restart" ];  then
     /usr/bin/swift-init object-replicator stop
     pgrep -u swift -f /usr/bin/swift-object-replicator > /dev/null
     if [ $? -eq 0 ]; then
