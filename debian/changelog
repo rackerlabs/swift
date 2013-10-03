@@ -1,4 +1,4 @@
-swift (1.9.2.256.g9f727d4~rax1) lucid; urgency=low
+swift (1.9.2~rax1) lucid; urgency=low
 
    * 02e247c Add "note" box callouts to SAIO for user changes.
    * 062a67b Allow slightly older dnspython (>= 1.9.4).
