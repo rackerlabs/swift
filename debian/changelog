@@ -1,3 +1,15 @@
+swift (1.9.2~rax3) lucid; urgency=low
+
+   * c117e2d Updated __init__.py with new stuff since last release
+   * 9bd32cb Fixed the debian package version
+   * 358b1d7 Making the build skip docs and reference swift.openstack.org
+   * 0157377 Another attempt to get a "reasonable" build.
+   * cf927be Revert "Trying to get around PBR"
+   * ca73012 Trying to get around PBR
+   * 9729311 Updated changelog to 1.9.2.256.g9f727d4~rax1
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 3 Oct 2013 17:59:00 +0000
+
 swift (1.9.2~rax2) lucid; urgency=low
 
    * 02e247c Add "note" box callouts to SAIO for user changes.
