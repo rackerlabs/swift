@@ -1,3 +1,125 @@
+swift (1.9.2.256.g9f727d4~rax1) lucid; urgency=low
+
+   * 02e247c Add "note" box callouts to SAIO for user changes.
+   * 062a67b Allow slightly older dnspython (>= 1.9.4).
+   * ae84701 Pool memcache connections
+   * e8a07c4 Fedora 19 updates
+   * f9c4eb8 Simplify object path when reporting SLO put errors
+   * 8ab06eb Set path_info in sub_slo manifest GET requests
+   * 4c4a8ab improve bulk document
+   * df39602 bulk delete bug with trailing whitespace
+   * d8e0492 Fix internal swift.source tracking.
+   * d9d7b21 Install libffi-dev in SAIO docs.
+   * ce5e810 Update SAIO doc to have double proxy-logging in pipeline.
+   * 180cd18 Move location of HTTPException in swift_testing
+   * f62ecae =/== consistency
+   * 2584916 Hackup obj replicator init script
+   * 4e8b2ff Use created container in unit test
+   * 3e6f929 update SLO delete error handling
+   * 92ae497 Fix unsuitable assertTrue
+   * 01f58d6 SLOs broken for range requests
+   * 4a5c2fa Log x-copy-from when it could be useful
+   * 285a3a8 add seek() to CompressingFileReader
+   * 58efcb3 Fix probe tests
+   * a6443f7 Add HTTPSeeOther(303) and HTTPTemporaryRedirect(307) to swob
+   * 7760f41 Refactor common/utils methods to common/ondisk
+   * da78035 Add a user variable to templates
+   * 75086a1 Supply correct arguments to __init__ of a base class
+   * a9c119d Removed many unnecessary uses of dict.keys
+   * 9cd7c6c Optimizations to Ring.get_more_nodes()
+   * cfa4f94 Use a local variable auditor_worker
+   * 5026e45 Switched some relative imports to be absolute
+   * 5b0788d Use an existing local var rather than doing alookup
+   * a30a7ce Add handoffs_first and handoff_delete to obj-repl
+   * 0b949eb Remove unused method iter_devices_partition
+   * a443079 Ensure audit tests don't cause unwanted errors
+   * 0afcc67 remove useless if from slo
+   * 64430da fix race in test_wait on busy server
+   * 2283c54 Tinker with dockstrings in back-ends and related places
+   * d3bd30d Fix sync test when localhost on port 80 is binded
+   * 2d0ceb1 Verbose functional test request failures.
+   * 83a6ec1 Man page lintian errors and warnings
+   * 84296aa Improve unittest coverage of account reaper
+   * d51e873 Remove keep_data_fp argument from DiskFile constructor
+   * d4b024a Split backends off swift/common/db.py
+   * fffc95c Handle X-Copy-From header in account_quota mw
+   * 30b1590 Assume ETag is always in the metadata
+   * ce12d66 fix swift i18n
+   * 54d5f3b Fixed a suite that was over-indented
+   * 537626a Don't stat the path in ``unlink_older_than``
+   * 816c73e Add Apache 2.0 licensing headers
+   * 00f9d71 Move string expansion outside localisation (H702)
+   * 3d36a76 Use Python 3.x compatible except construct
+   * 3102ad4 Do not use locals() for string formatting (H501)
+   * 698023f Provide a method for retrieving on-disk metadata
+   * 9d98070 Remove reference to 'file' built-in
+   * 12f95cc Perform fewer stat calls when doing auditing of objects
+   * fdfa34e Add a delete() method to DiskFile
+   * 9e7c56a Rename DiskFile.writer to create
+   * 57f97e7 Remove dupe account_audit when reporting stats
+   * a9aec73 add reseller_admin_role to sample config
+   * 93ab856 Add support for POST commit coverage runs
+   * 22451b2 Pep8 final two unit test modules and enforce (12 of 12)
+   * 14037b4 Flake8 container test_server.py (11 of 12)
+   * 9cdee33 Refactor finalize_put as an object method
+   * aae122d Rename param to avoid use of built-in name hash
+   * 8d614ee Made the HTTP comparisons slightly more idiomatic
+   * 6ae4e17 Pep8 account and proxy server unit tests (10 of 12)
+   * 1d9213b Pep8 container test_sync and test_diskfile (9 of 12)
+   * b5a0b83 Pep8 remaining unit test modules in common (8 of 12)
+   * 0ebddd8 Pep8 unit tests in middleware > 20 violations (7 of 12)
+   * 56593a1 Pep8 unit test modules w/ <= 20 violations (6 of 12)
+   * be1cff4 Pep8 unit test modules w/ <= 10 violations (5 of 12)
+   * c067abd Pep8 unit test modules for hacking and one liners (4 of 12)
+   * c57f526 Pep8 the functionalnosetests tests (3 of 12)
+   * 0014f2c Pep8 the functional tests (2 of 12)
+   * 0b7432b Pep8 the probe tests (1 of 12)
+   * 68da00a Always format messages sent to FakeLogger
+   * 016e224 Fix string format error in DiskFile close
+   * 4893aac Allow users to extract tars to containers with ACLs set
+   * 45eb763 Made the signature of HeaderKeyDict.__init__ match dict's
+   * 921e583 Two small performance improvements to header generation
+   * fc9cd6b Fix changes in XML that broke old clients
+   * 6570c24 Only set PYTHON_EGG_CACHE if it isn't already set
+   * a8fcc94 Small test cleanups from b63089d.
+   * 62ae88b Defer computation of available methods until needed.
+   * b63089d Refactor DiskFile init logic into multiple methods
+   * 361c585 Hot patch to fix legacy xml issues
+   * 27c7abf Add constructor args to swob.Request.blank
+   * da42fe0 Clean up utf8ness quote
+   * 0fc0fba Remove duplicate code for update_put_timestamp().
+   * e19cf5c Clean up some of the proxy unit tests.
+   * 092ca2d Added test for timeout regression
+   * b0ad4c6 Hotpatch to fix timeout issue (gholt said it was ok) :)
+   * 9dbe7ca Fix regression that causes Timeouts to return 500
+   * 3947a4f Don't use float() when normalize_timestamp() does it.
+   * 61a8a9a Refactor path splitting and validation.
+   * 0c505d4 Fix setdefault() for swob's HeaderKeyDict.
+   * 82ab838 remove unused reference to resellers_conf
+   * bdba160 Improve swift-bench performance
+   * dd9eda6 get rid of unlinkold
+   * e8aa23e change .data vrs .meta file metadata filtering in obj.diskfile
+   * a65e526 Don't silence errors in spawning processes
+   * 176a341 Make the length of a line logged configurable
+   * 85475b2 Run a more GC iterations to make sure weakrefs are collected
+   * 74428b2 Specify a uid/gid at install
+   * fad5f25 Use randomly named file for temporay file
+   * 897e6e8 Unify DatabaseBroker.reclaim
+   * a4f3714 Refactor how we pick listings' content type.
+   * 35b991a Some how DELETE not using _parse_path()
+   * 5001869 DiskFile logger argument is not a keyword
+   * 52eca4d Implements configurable swift_owner_headers
+   * 4ef9937 clean temp dir in /tmp
+   * 908e5fc [tempauth] update token if its value changes or expires
+   * 05a9853 use testCase.assert instead of assert and try...except
+   * 6fb327b Add unit test for account/auditor.py
+   * 4332bff Migrate to pbr for build
+   * d3e2cb3 Fix unbalanced rings after initial creation.
+   * 33e6923 Preparing for 1.9.2~rax1 packages (pulling in memcache fix)
+   * c8795e6 Added container listing ratelimiting
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 3 Oct 2013 14:27:00 +0000
+
 swift (1.9.2~rax1) lucid; urgency=low
 
    * 8a84998 memcache timeout parameter bug in get_info
