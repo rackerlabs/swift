@@ -16,9 +16,6 @@
 
 # THIS FILE IS MANAGED BY THE GLOBAL REQUIREMENTS REPO - DO NOT EDIT
 import setuptools
-import os
-
-os.environ['PBR_VERSION'] = '1.9.2.256.g9f727d4~rax1'
 
 setuptools.setup(
     setup_requires=['pbr>=0.5.21,<1.0'],
