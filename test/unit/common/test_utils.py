@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Tests for swift.common.utils """
+"""Tests for swift.common.utils"""
 
 from __future__ import with_statement
 from test.unit import temptree
@@ -30,11 +30,13 @@ import sys
 
 from textwrap import dedent
 
+import tempfile
 import threading
 import time
 import unittest
 import fcntl
 import shutil
+from contextlib import nested
 
 from Queue import Queue, Empty
 from getpass import getuser
@@ -42,13 +44,14 @@ from shutil import rmtree
 from StringIO import StringIO
 from functools import partial
 from tempfile import TemporaryFile, NamedTemporaryFile, mkdtemp
-
+from netifaces import AF_INET6
 from mock import MagicMock, patch
 
 from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ConnectionTimeout, LockTimeout)
 from swift.common import utils
 from swift.common.swob import Response
+from test.unit import FakeLogger
 
 
 class MockOs():
@@ -128,35 +131,10 @@ def reset_loggers():
 
 
 class TestUtils(unittest.TestCase):
-    """ Tests for swift.common.utils """
-
-    def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = 'startcap'
-
-    def test_normalize_timestamp(self):
-        """ Test swift.common.utils.normalize_timestamp """
-        self.assertEquals(utils.normalize_timestamp('1253327593.48174'),
-                          "1253327593.48174")
-        self.assertEquals(utils.normalize_timestamp(1253327593.48174),
-                          "1253327593.48174")
-        self.assertEquals(utils.normalize_timestamp('1253327593.48'),
-                          "1253327593.48000")
-        self.assertEquals(utils.normalize_timestamp(1253327593.48),
-                          "1253327593.48000")
-        self.assertEquals(utils.normalize_timestamp('253327593.48'),
-                          "0253327593.48000")
-        self.assertEquals(utils.normalize_timestamp(253327593.48),
-                          "0253327593.48000")
-        self.assertEquals(utils.normalize_timestamp('1253327593'),
-                          "1253327593.00000")
-        self.assertEquals(utils.normalize_timestamp(1253327593),
-                          "1253327593.00000")
-        self.assertRaises(ValueError, utils.normalize_timestamp, '')
-        self.assertRaises(ValueError, utils.normalize_timestamp, 'abc')
+    """Tests for swift.common.utils """
 
     def test_backwards(self):
-        """ Test swift.common.utils.backward """
+        # Test swift.common.utils.backward
 
         # The lines are designed so that the function would encounter
         # all of the boundary conditions and typical conditions.
@@ -213,7 +191,7 @@ class TestUtils(unittest.TestCase):
         os.unlink(testroot)
 
     def test_split_path(self):
-        """ Test swift.common.utils.split_account_path """
+        # Test swift.common.utils.split_account_path
         self.assertRaises(ValueError, utils.split_path, '')
         self.assertRaises(ValueError, utils.split_path, '/')
         self.assertRaises(ValueError, utils.split_path, '//')
@@ -239,45 +217,15 @@ class TestUtils(unittest.TestCase):
         self.assertEquals(utils.split_path('/a/c/', 2, 3), ['a', 'c', ''])
         try:
             utils.split_path('o\nn e', 2)
-        except ValueError, err:
+        except ValueError as err:
             self.assertEquals(str(err), 'Invalid path: o%0An%20e')
         try:
             utils.split_path('o\nn e', 2, 3, True)
-        except ValueError, err:
+        except ValueError as err:
             self.assertEquals(str(err), 'Invalid path: o%0An%20e')
 
-    def test_validate_device_partition(self):
-        """ Test swift.common.utils.validate_device_partition """
-        utils.validate_device_partition('foo', 'bar')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, '', '')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, '', 'foo')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, 'foo', '')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, 'foo/bar', 'foo')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, 'foo', 'foo/bar')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, '.', 'foo')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, '..', 'foo')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, 'foo', '.')
-        self.assertRaises(ValueError,
-                          utils.validate_device_partition, 'foo', '..')
-        try:
-            utils.validate_device_partition('o\nn e', 'foo')
-        except ValueError, err:
-            self.assertEquals(str(err), 'Invalid device: o%0An%20e')
-        try:
-            utils.validate_device_partition('foo', 'o\nn e')
-        except ValueError, err:
-            self.assertEquals(str(err), 'Invalid partition: o%0An%20e')
-
     def test_NullLogger(self):
-        """ Test swift.common.utils.NullLogger """
+        # Test swift.common.utils.NullLogger
         sio = StringIO()
         nl = utils.NullLogger()
         nl.write('test')
@@ -439,8 +387,8 @@ class TestUtils(unittest.TestCase):
                     os.path.isdir('/dev/log'):
                 # Since socket on OSX is in /var/run/syslog, there will be
                 # a fallback to UDP.
-                expected_args.append(((),
-                                  {'facility': orig_sysloghandler.LOG_LOCAL3}))
+                expected_args.append(
+                    ((), {'facility': orig_sysloghandler.LOG_LOCAL3}))
             self.assertEquals(expected_args, syslog_handler_args)
 
             syslog_handler_args = []
@@ -635,38 +583,40 @@ class TestUtils(unittest.TestCase):
             logger.logger.removeHandler(handler)
             reset_loggers()
 
-    def test_storage_directory(self):
-        self.assertEquals(utils.storage_directory('objects', '1', 'ABCDEF'),
-                          'objects/1/DEF/ABCDEF')
-
     def test_whataremyips(self):
         myips = utils.whataremyips()
         self.assert_(len(myips) > 1)
         self.assert_('127.0.0.1' in myips)
 
-    def test_hash_path(self):
-        _prefix = utils.HASH_PATH_PREFIX
-        utils.HASH_PATH_PREFIX = ''
-        # Yes, these tests are deliberately very fragile. We want to make sure
-        # that if someones changes the results hash_path produces, they know it
-        try:
-            self.assertEquals(utils.hash_path('a'),
-                              '1c84525acb02107ea475dcd3d09c2c58')
-            self.assertEquals(utils.hash_path('a', 'c'),
-                              '33379ecb053aa5c9e356c68997cbb59e')
-            self.assertEquals(utils.hash_path('a', 'c', 'o'),
-                              '06fbf0b514e5199dfc4e00f42eb5ea83')
-            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=False),
-                              '06fbf0b514e5199dfc4e00f42eb5ea83')
-            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=True),
-                              '\x06\xfb\xf0\xb5\x14\xe5\x19\x9d\xfcN'
-                              '\x00\xf4.\xb5\xea\x83')
-            self.assertRaises(ValueError, utils.hash_path, 'a', object='o')
-            utils.HASH_PATH_PREFIX = 'abcdef'
-            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=False),
-                              '363f9b535bfb7d17a43a46a358afca0e')
-        finally:
-            utils.HASH_PATH_PREFIX = _prefix
+    def test_whataremyips_error(self):
+        def my_interfaces():
+            return ['eth0']
+
+        def my_ifaddress_error(interface):
+            raise ValueError
+
+        with nested(
+                patch('netifaces.interfaces', my_interfaces),
+                patch('netifaces.ifaddresses', my_ifaddress_error)):
+            self.assertEquals(utils.whataremyips(), [])
+
+    def test_whataremyips_ipv6(self):
+        test_ipv6_address = '2001:6b0:dead:beef:2::32'
+        test_interface = 'eth0'
+
+        def my_ipv6_interfaces():
+            return ['eth0']
+
+        def my_ipv6_ifaddresses(interface):
+            return {AF_INET6:
+                    [{'netmask': 'ffff:ffff:ffff:ffff::',
+                      'addr': '%s%%%s' % (test_ipv6_address, test_interface)}]}
+        with nested(
+                patch('netifaces.interfaces', my_ipv6_interfaces),
+                patch('netifaces.ifaddresses', my_ipv6_ifaddresses)):
+            myips = utils.whataremyips()
+            self.assertEquals(len(myips), 1)
+            self.assertEquals(myips[0], test_ipv6_address)
 
     def test_load_libc_function(self):
         self.assert_(callable(
@@ -681,9 +631,10 @@ foo = bar
 [section2]
 log_name = yarr'''
         # setup a real file
-        with open('/tmp/test', 'wb') as f:
+        fd, temppath = tempfile.mkstemp(dir='/tmp')
+        with os.fdopen(fd, 'wb') as f:
             f.write(conf)
-        make_filename = lambda: '/tmp/test'
+        make_filename = lambda: temppath
         # setup a file stream
         make_fp = lambda: StringIO(conf)
         for conf_object_maker in (make_filename, make_fp):
@@ -715,9 +666,9 @@ log_name = yarr'''
             expected = {'__file__': conffile, 'log_name': 'section1',
                         'foo': 'bar', 'bar': 'baz'}
             self.assertEquals(result, expected)
-        self.assertRaises(SystemExit, utils.readconf, '/tmp/test', 'section3')
-        os.unlink('/tmp/test')
-        self.assertRaises(SystemExit, utils.readconf, '/tmp/test')
+        self.assertRaises(SystemExit, utils.readconf, temppath, 'section3')
+        os.unlink(temppath)
+        self.assertRaises(SystemExit, utils.readconf, temppath)
 
     def test_readconf_raw(self):
         conf = '''[section1]
@@ -726,9 +677,10 @@ foo = bar
 [section2]
 log_name = %(yarr)s'''
         # setup a real file
-        with open('/tmp/test', 'wb') as f:
+        fd, temppath = tempfile.mkstemp(dir='/tmp')
+        with os.fdopen(fd, 'wb') as f:
             f.write(conf)
-        make_filename = lambda: '/tmp/test'
+        make_filename = lambda: temppath
         # setup a file stream
         make_fp = lambda: StringIO(conf)
         for conf_object_maker in (make_filename, make_fp):
@@ -739,8 +691,8 @@ log_name = %(yarr)s'''
                         'section1': {'foo': 'bar'},
                         'section2': {'log_name': '%(yarr)s'}}
             self.assertEquals(result, expected)
-        os.unlink('/tmp/test')
-        self.assertRaises(SystemExit, utils.readconf, '/tmp/test')
+        os.unlink(temppath)
+        self.assertRaises(SystemExit, utils.readconf, temppath)
 
     def test_readconf_dir(self):
         config_dir = {
@@ -1148,7 +1100,7 @@ log_name = %(yarr)s'''
         for (value, default), expected in expectations.items():
             try:
                 rv = utils.config_auto_int_value(value, default)
-            except Exception, e:
+            except Exception as e:
                 if e.__class__ is not expected:
                     raise
             else:
@@ -1211,7 +1163,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(0))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
             # Want 1024 reserved, have 512 * 2 free, so fails
@@ -1221,7 +1173,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(0))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
             # Want 2048 reserved, have 1024 * 1 free, so fails
@@ -1231,7 +1183,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(0))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 2048')
             # Want 2048 reserved, have 512 * 2 free, so fails
@@ -1241,7 +1193,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(0))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 2048')
             # Want 1023 reserved, have 1024 * 1 free, but file size is 1, so
@@ -1252,7 +1204,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(1))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1023 <= 1023')
             # Want 1022 reserved, have 1024 * 1 free, and file size is 1, so
@@ -1275,7 +1227,7 @@ log_name = %(yarr)s'''
             exc = None
             try:
                 fallocate(0, 1, 0, ctypes.c_uint64(0))
-            except OSError, err:
+            except OSError as err:
                 exc = err
             self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
         finally:
@@ -1361,9 +1313,11 @@ log_name = %(yarr)s'''
         with patch.object(utils.tpool, 'execute', lambda f: f()):
             self.assertTrue(
                 utils.tpool_reraise(MagicMock(return_value='test1')), 'test1')
-            self.assertRaises(Exception,
+            self.assertRaises(
+                Exception,
                 utils.tpool_reraise, MagicMock(side_effect=Exception('test2')))
-            self.assertRaises(BaseException,
+            self.assertRaises(
+                BaseException,
                 utils.tpool_reraise,
                 MagicMock(side_effect=BaseException('test3')))
 
@@ -1395,8 +1349,10 @@ log_name = %(yarr)s'''
 
             with utils.lock_file(nt.name, timeout=3, unlink=False) as f:
                 try:
-                    with utils.lock_file(nt.name, timeout=1, unlink=False) as f:
-                        self.assertTrue(False, "Expected LockTimeout exception")
+                    with utils.lock_file(
+                            nt.name, timeout=1, unlink=False) as f:
+                        self.assertTrue(
+                            False, "Expected LockTimeout exception")
                 except LockTimeout:
                     pass
 
@@ -1404,21 +1360,22 @@ log_name = %(yarr)s'''
                 self.assertEqual(f.read(), "test string\nanother string")
                 # we have a lock, now let's try to get a newer one
                 fd = os.open(nt.name, flags)
-                self.assertRaises(IOError, fcntl.flock, fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertRaises(
+                    IOError, fcntl.flock, fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
             self.assertRaises(OSError, os.remove, nt.name)
 
     def test_ismount_path_does_not_exist(self):
         tmpdir = mkdtemp()
         try:
-            assert utils.ismount(os.path.join(tmpdir, 'bar')) is False
+            self.assertFalse(utils.ismount(os.path.join(tmpdir, 'bar')))
         finally:
             shutil.rmtree(tmpdir)
 
     def test_ismount_path_not_mount(self):
         tmpdir = mkdtemp()
         try:
-            assert utils.ismount(tmpdir) is False
+            self.assertFalse(utils.ismount(tmpdir))
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1430,12 +1387,7 @@ log_name = %(yarr)s'''
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                try:
-                    utils.ismount(tmpdir)
-                except OSError:
-                    pass
-                else:
-                    self.fail("Expected OSError")
+                self.assertRaises(OSError, utils.ismount, tmpdir)
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1444,12 +1396,12 @@ log_name = %(yarr)s'''
         try:
             link = os.path.join(tmpdir, "tmp")
             os.symlink("/tmp", link)
-            assert utils.ismount(link) is False
+            self.assertFalse(utils.ismount(link))
         finally:
             shutil.rmtree(tmpdir)
 
     def test_ismount_path_is_root(self):
-        assert utils.ismount('/') is True
+        self.assertTrue(utils.ismount('/'))
 
     def test_ismount_parent_path_error(self):
 
@@ -1464,12 +1416,7 @@ log_name = %(yarr)s'''
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                try:
-                    utils.ismount(tmpdir)
-                except OSError:
-                    pass
-                else:
-                    self.fail("Expected OSError")
+                self.assertRaises(OSError, utils.ismount, tmpdir)
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1494,12 +1441,7 @@ log_name = %(yarr)s'''
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                try:
-                    utils.ismount(tmpdir)
-                except OSError:
-                    self.fail("Unexpected exception")
-                else:
-                    pass
+                self.assertTrue(utils.ismount(tmpdir))
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1526,12 +1468,7 @@ log_name = %(yarr)s'''
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                try:
-                    utils.ismount(tmpdir)
-                except OSError:
-                    self.fail("Unexpected exception")
-                else:
-                    pass
+                self.assertTrue(utils.ismount(tmpdir))
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1555,6 +1492,42 @@ log_name = %(yarr)s'''
         self.assertEquals(
             utils.parse_content_type(r'text/plain; x="\""; a'),
             ('text/plain', [('x', r'"\""'), ('a', '')]))
+
+    def test_override_bytes_from_content_type(self):
+        listing_dict = {
+            'bytes': 1234, 'hash': 'asdf', 'name': 'zxcv',
+            'content_type': 'text/plain; hello="world"; swift_bytes=15'}
+        utils.override_bytes_from_content_type(listing_dict,
+                                               logger=FakeLogger())
+        self.assertEquals(listing_dict['bytes'], 15)
+        self.assertEquals(listing_dict['content_type'],
+                          'text/plain;hello="world"')
+
+        listing_dict = {
+            'bytes': 1234, 'hash': 'asdf', 'name': 'zxcv',
+            'content_type': 'text/plain; hello="world"; swift_bytes=hey'}
+        utils.override_bytes_from_content_type(listing_dict,
+                                               logger=FakeLogger())
+        self.assertEquals(listing_dict['bytes'], 1234)
+        self.assertEquals(listing_dict['content_type'],
+                          'text/plain;hello="world"')
+
+    def test_quote(self):
+        res = utils.quote('/v1/a/c3/subdirx/')
+        assert res == '/v1/a/c3/subdirx/'
+        res = utils.quote('/v1/a&b/c3/subdirx/')
+        assert res == '/v1/a%26b/c3/subdirx/'
+        res = utils.quote('/v1/a&b/c3/subdirx/', safe='&')
+        assert res == '%2Fv1%2Fa&b%2Fc3%2Fsubdirx%2F'
+        unicode_sample = u'\uc77c\uc601'
+        account = 'abc_' + unicode_sample
+        valid_utf8_str = utils.get_valid_utf8_str(account)
+        account = 'abc_' + unicode_sample.encode('utf-8')[::-1]
+        invalid_utf8_str = utils.get_valid_utf8_str(account)
+        self.assertEquals('abc_%EC%9D%BC%EC%98%81',
+                          utils.quote(valid_utf8_str))
+        self.assertEquals('abc_%EF%BF%BD%EF%BF%BD%EC%BC%9D%EF%BF%BD',
+                          utils.quote(invalid_utf8_str))
 
 
 class TestFileLikeIter(unittest.TestCase):
@@ -1664,14 +1637,14 @@ class TestFileLikeIter(unittest.TestCase):
         iter_file = utils.FileLikeIter('abcdef')
         self.assertEquals(iter_file.next(), 'a')
         iter_file.close()
-        self.assertTrue(iter_file.closed, True)
+        self.assertTrue(iter_file.closed)
         self.assertRaises(ValueError, iter_file.next)
         self.assertRaises(ValueError, iter_file.read)
         self.assertRaises(ValueError, iter_file.readline)
         self.assertRaises(ValueError, iter_file.readlines)
         # Just make sure repeated close calls don't raise an Exception
         iter_file.close()
-        self.assertTrue(iter_file.closed, True)
+        self.assertTrue(iter_file.closed)
 
 
 class TestStatsdLogging(unittest.TestCase):
@@ -1765,7 +1738,7 @@ class TestStatsdLogging(unittest.TestCase):
 
         payload = mock_socket.sent[0][0]
         self.assertTrue(payload.endswith("|@%s" % effective_sample_rate),
-                       payload)
+                        payload)
 
         effective_sample_rate = 0.587 * 0.91
         statsd_client.random = lambda: effective_sample_rate - 0.001
@@ -1774,7 +1747,7 @@ class TestStatsdLogging(unittest.TestCase):
 
         payload = mock_socket.sent[1][0]
         self.assertTrue(payload.endswith("|@%s" % effective_sample_rate),
-                       payload)
+                        payload)
 
     def test_timing_stats(self):
         class MockController(object):
@@ -2002,7 +1975,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
                 if payload and 'STOP' in payload:
                     return 42
                 self.queue.put(payload)
-            except Exception, e:
+            except Exception as e:
                 sys.stderr.write('statsd_reader thread: %r' % (e,))
                 break
 

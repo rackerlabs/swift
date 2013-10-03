@@ -56,7 +56,7 @@ def get_response_body(data_format, data_dict, error_list):
         return json.dumps(data_dict)
     if data_format and data_format.endswith('/xml'):
         output = '<delete>\n'
-        for key in sorted(data_dict.keys()):
+        for key in sorted(data_dict):
             xml_key = key.replace(' ', '_').lower()
             output += '<%s>%s</%s>\n' % (xml_key, data_dict[key], xml_key)
         output += '<errors>\n'
@@ -69,7 +69,7 @@ def get_response_body(data_format, data_dict, error_list):
         return output
 
     output = ''
-    for key in sorted(data_dict.keys()):
+    for key in sorted(data_dict):
         output += '%s: %s\n' % (key, data_dict[key])
     output += 'Errors:\n'
     output += '\n'.join(
@@ -144,11 +144,11 @@ class Bulk(object):
 
     Will delete multiple objects or containers from their account with a
     single request. Responds to DELETE requests with query parameter
-    ?bulk-delete set. The Content-Type should be set to text/plain.
-    The body of the DELETE request will be a newline separated list of url
-    encoded objects to delete. You can delete 10,000 (configurable) objects
-    per request. The objects specified in the DELETE request body must be URL
-    encoded and in the form:
+    ?bulk-delete set. The request url is your storage url. The Content-Type
+    should be set to text/plain. The body of the DELETE request will be a
+    newline separated list of url encoded objects to delete. You can delete
+    10,000 (configurable) objects per request. The objects specified in the
+    DELETE request body must be URL encoded and in the form:
 
     /container_name/obj_name
 
@@ -190,26 +190,39 @@ class Bulk(object):
             conf.get('max_containers_per_extraction', 10000))
         self.max_failed_extractions = int(
             conf.get('max_failed_extractions', 1000))
+        self.max_failed_deletes = int(
+            conf.get('max_failed_deletes', 1000))
         self.max_deletes_per_request = int(
             conf.get('max_deletes_per_request', 10000))
         self.yield_frequency = int(conf.get('yield_frequency', 60))
 
     def create_container(self, req, container_path):
         """
-        Makes a subrequest to create a new container.
+        Checks if the container exists and if not try to create it.
         :params container_path: an unquoted path to a container to be created
-        :returns: None on success
-        :raises: CreateContainerError on creation error
+        :returns: True if created container, False if container exists
+        :raises: CreateContainerError when unable to create container
         """
         new_env = req.environ.copy()
         new_env['PATH_INFO'] = container_path
         new_env['swift.source'] = 'EA'
-        create_cont_req = Request.blank(container_path, environ=new_env)
-        resp = create_cont_req.get_response(self.app)
-        if resp.status_int // 100 != 2:
-            raise CreateContainerError(
-                "Create Container Failed: " + container_path,
-                resp.status_int, resp.status)
+        new_env['REQUEST_METHOD'] = 'HEAD'
+        head_cont_req = Request.blank(container_path, environ=new_env)
+        resp = head_cont_req.get_response(self.app)
+        if resp.is_success:
+            return False
+        if resp.status_int == 404:
+            new_env = req.environ.copy()
+            new_env['PATH_INFO'] = container_path
+            new_env['swift.source'] = 'EA'
+            new_env['REQUEST_METHOD'] = 'PUT'
+            create_cont_req = Request.blank(container_path, environ=new_env)
+            resp = create_cont_req.get_response(self.app)
+            if resp.is_success:
+                return True
+        raise CreateContainerError(
+            "Create Container Failed: " + container_path,
+            resp.status_int, resp.status)
 
     def get_objs_to_delete(self, req):
         """
@@ -228,15 +241,19 @@ class Bulk(object):
         while data_remaining:
             if '\n' in line:
                 obj_to_delete, line = line.split('\n', 1)
-                objs_to_delete.append(unquote(obj_to_delete))
+                obj_to_delete = obj_to_delete.strip()
+                objs_to_delete.append(
+                    {'name': unquote(obj_to_delete)})
             else:
                 data = req.body_file.read(MAX_PATH_LENGTH)
                 if data:
                     line += data
                 else:
                     data_remaining = False
-                    if line.strip():
-                        objs_to_delete.append(unquote(line))
+                    obj_to_delete = line.strip()
+                    if obj_to_delete:
+                        objs_to_delete.append(
+                            {'name': unquote(obj_to_delete)})
             if len(objs_to_delete) > self.max_deletes_per_request:
                 raise HTTPRequestEntityTooLarge(
                     'Maximum Bulk Deletes: %d per request' %
@@ -293,13 +310,22 @@ class Bulk(object):
                     separator = '\r\n\r\n'
                     last_yield = time()
                     yield ' '
-                obj_to_delete = obj_to_delete.strip()
-                if not obj_to_delete:
+                obj_name = obj_to_delete['name']
+                if not obj_name:
+                    continue
+                if len(failed_files) >= self.max_failed_deletes:
+                    raise HTTPBadRequest('Max delete failures exceeded')
+                if obj_to_delete.get('error'):
+                    if obj_to_delete['error']['code'] == HTTP_NOT_FOUND:
+                        resp_dict['Number Not Found'] += 1
+                    else:
+                        failed_files.append([quote(obj_name),
+                                            obj_to_delete['error']['message']])
                     continue
                 delete_path = '/'.join(['', vrs, account,
-                                        obj_to_delete.lstrip('/')])
+                                        obj_name.lstrip('/')])
                 if not check_utf8(delete_path):
-                    failed_files.append([quote(obj_to_delete),
+                    failed_files.append([quote(obj_name),
                                          HTTPPreconditionFailed().status])
                     continue
                 new_env = req.environ.copy()
@@ -316,13 +342,12 @@ class Bulk(object):
                 elif resp.status_int == HTTP_NOT_FOUND:
                     resp_dict['Number Not Found'] += 1
                 elif resp.status_int == HTTP_UNAUTHORIZED:
-                    failed_files.append([quote(obj_to_delete),
+                    failed_files.append([quote(obj_name),
                                          HTTPUnauthorized().status])
-                    raise HTTPUnauthorized(request=req)
                 else:
                     if resp.status_int // 100 == 5:
                         failed_file_response_type = HTTPBadGateway
-                    failed_files.append([quote(obj_to_delete), resp.status])
+                    failed_files.append([quote(obj_name), resp.status])
 
             if failed_files:
                 resp_dict['Response Status'] = \
@@ -332,7 +357,7 @@ class Bulk(object):
                 resp_dict['Response Status'] = HTTPBadRequest().status
                 resp_dict['Response Body'] = 'Invalid bulk delete.'
 
-        except HTTPException, err:
+        except HTTPException as err:
             resp_dict['Response Status'] = err.status
             resp_dict['Response Body'] = err.body
         except Exception:
@@ -361,7 +386,7 @@ class Bulk(object):
         failed_files = []
         last_yield = time()
         separator = ''
-        existing_containers = set()
+        containers_accessed = set()
         try:
             if not out_content_type:
                 raise HTTPNotAcceptable(request=req)
@@ -382,6 +407,7 @@ class Bulk(object):
                                fileobj=req.body_file)
             failed_response_type = HTTPBadRequest
             req.environ['eventlet.minimum_write_chunk_size'] = 0
+            containers_created = 0
             while True:
                 if last_yield + self.yield_frequency < time():
                     separator = '\r\n\r\n'
@@ -414,30 +440,33 @@ class Bulk(object):
                             quote(obj_path[:MAX_PATH_LENGTH]),
                             HTTPRequestEntityTooLarge().status])
                         continue
-                    if container not in existing_containers:
+                    container_failure = None
+                    if container not in containers_accessed:
+                        cont_path = '/'.join(['', vrs, account, container])
                         try:
-                            self.create_container(
-                                req, '/'.join(['', vrs, account, container]))
-                            existing_containers.add(container)
-                        except CreateContainerError, err:
-                            failed_files.append([
-                                quote(obj_path[:MAX_PATH_LENGTH]),
-                                err.status])
+                            if self.create_container(req, cont_path):
+                                containers_created += 1
+                                if containers_created > self.max_containers:
+                                    raise HTTPBadRequest(
+                                        'More than %d containers to create '
+                                        'from tar.' % self.max_containers)
+                        except CreateContainerError as err:
+                            # the object PUT to this container still may
+                            # succeed if acls are set
+                            container_failure = [
+                                quote(cont_path[:MAX_PATH_LENGTH]),
+                                err.status]
                             if err.status_int == HTTP_UNAUTHORIZED:
                                 raise HTTPUnauthorized(request=req)
-                            continue
                         except ValueError:
                             failed_files.append([
                                 quote(obj_path[:MAX_PATH_LENGTH]),
                                 HTTPBadRequest().status])
                             continue
-                        if len(existing_containers) > self.max_containers:
-                            raise HTTPBadRequest(
-                                'More than %d base level containers in tar.' %
-                                self.max_containers)
 
                     tar_file = tar.extractfile(tar_info)
                     new_env = req.environ.copy()
+                    new_env['REQUEST_METHOD'] = 'PUT'
                     new_env['wsgi.input'] = tar_file
                     new_env['PATH_INFO'] = destination
                     new_env['CONTENT_LENGTH'] = tar_info.size
@@ -446,9 +475,12 @@ class Bulk(object):
                         '%s BulkExpand' % req.environ.get('HTTP_USER_AGENT')
                     create_obj_req = Request.blank(destination, new_env)
                     resp = create_obj_req.get_response(self.app)
-                    if resp.status_int // 100 == 2:
+                    containers_accessed.add(container)
+                    if resp.is_success:
                         resp_dict['Number Files Created'] += 1
                     else:
+                        if container_failure:
+                            failed_files.append(container_failure)
                         if resp.status_int == HTTP_UNAUTHORIZED:
                             failed_files.append([
                                 quote(obj_path[:MAX_PATH_LENGTH]),
@@ -465,10 +497,10 @@ class Bulk(object):
                 resp_dict['Response Status'] = HTTPBadRequest().status
                 resp_dict['Response Body'] = 'Invalid Tar File: No Valid Files'
 
-        except HTTPException, err:
+        except HTTPException as err:
             resp_dict['Response Status'] = err.status
             resp_dict['Response Body'] = err.body
-        except tarfile.TarError, tar_error:
+        except tarfile.TarError as tar_error:
             resp_dict['Response Status'] = HTTPBadRequest().status
             resp_dict['Response Body'] = 'Invalid Tar File: %s' % tar_error
         except Exception:

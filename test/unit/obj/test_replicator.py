@@ -29,8 +29,9 @@ from eventlet.green import subprocess
 from eventlet import Timeout, tpool
 
 from test.unit import FakeLogger
-from swift.common import utils
-from swift.common.utils import hash_path, mkdirs, normalize_timestamp
+from swift.common.utils import mkdirs
+from swift.common import ondisk
+from swift.common.ondisk import hash_path, normalize_timestamp
 from swift.common import ring
 from swift.obj import diskfile, replicator as object_replicator
 
@@ -126,17 +127,19 @@ def _create_test_ring(path):
     intended_part_shift = 30
     intended_reload_time = 15
     with closing(GzipFile(testgz, 'wb')) as f:
-        pickle.dump(ring.RingData(intended_replica2part2dev_id,
-            intended_devs, intended_part_shift),
+        pickle.dump(
+            ring.RingData(intended_replica2part2dev_id,
+                          intended_devs, intended_part_shift),
             f)
-    return ring.Ring(path, ring_name='object', reload_time=intended_reload_time)
+    return ring.Ring(path, ring_name='object',
+                     reload_time=intended_reload_time)
 
 
 class TestObjectReplicator(unittest.TestCase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
+        ondisk.HASH_PATH_SUFFIX = 'endcap'
+        ondisk.HASH_PATH_PREFIX = ''
         # Setup a test ring (stolen from common/test_ring.py)
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'node')
@@ -164,7 +167,7 @@ class TestObjectReplicator(unittest.TestCase):
     def test_run_once(self):
         replicator = object_replicator.ObjectReplicator(
             dict(swift_dir=self.testdir, devices=self.devices,
-                mount_check='false', timeout='300', stats_interval='1'))
+                 mount_check='false', timeout='300', stats_interval='1'))
         was_connector = object_replicator.http_connect
         object_replicator.http_connect = mock_http_connect(200)
         cur_part = '0'
@@ -182,7 +185,7 @@ class TestObjectReplicator(unittest.TestCase):
         process_arg_checker = []
         nodes = [node for node in
                  self.ring.get_part_nodes(int(cur_part))
-                     if node['ip'] not in _ips()]
+                 if node['ip'] not in _ips()]
         for node in nodes:
             rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], cur_part)
             process_arg_checker.append(
@@ -234,7 +237,7 @@ class TestObjectReplicator(unittest.TestCase):
         for job in jobs:
             jobs_by_part[job['partition']] = job
         self.assertEquals(len(jobs_to_delete), 1)
-        self.assertTrue('1', jobs_to_delete[0]['partition'])
+        self.assertEquals('1', jobs_to_delete[0]['partition'])
         self.assertEquals(
             [node['id'] for node in jobs_by_part['0']['nodes']], [1, 2])
         self.assertEquals(
@@ -248,6 +251,12 @@ class TestObjectReplicator(unittest.TestCase):
                 self.assertEquals(node['device'], 'sda')
             self.assertEquals(jobs_by_part[part]['path'],
                               os.path.join(self.objects, part))
+
+    def test_collect_jobs_handoffs_first(self):
+        self.replicator.handoffs_first = True
+        jobs = self.replicator.collect_jobs()
+        self.assertTrue(jobs[0]['delete'])
+        self.assertEquals('1', jobs[0]['partition'])
 
     def test_collect_jobs_removes_zbf(self):
         """
@@ -290,12 +299,136 @@ class TestObjectReplicator(unittest.TestCase):
         with mock.patch('swift.obj.replicator.http_connect',
                         mock_http_connect(200)):
             df = diskfile.DiskFile(self.devices,
-                                   'sda', '0', 'a', 'c', 'o', FakeLogger())
+                                   'sda', '1', 'a', 'c', 'o', FakeLogger())
             mkdirs(df.datadir)
+            print df.datadir
+            f = open(os.path.join(df.datadir,
+                                  normalize_timestamp(time.time()) + '.data'),
+                     'wb')
+            f.write('1234567890')
+            f.close()
+            ohash = hash_path('a', 'c', 'o')
+            data_dir = ohash[-3:]
+            whole_path_from = os.path.join(self.objects, '1', data_dir)
             part_path = os.path.join(self.objects, '1')
             self.assertTrue(os.access(part_path, os.F_OK))
-            self.replicator.replicate()
+            nodes = [node for node in
+                     self.ring.get_part_nodes(1)
+                     if node['ip'] not in _ips()]
+            process_arg_checker = []
+            for node in nodes:
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], 1)
+                process_arg_checker.append(
+                    (0, '', ['rsync', whole_path_from, rsync_mod]))
+            with _mock_process(process_arg_checker):
+                self.replicator.replicate()
             self.assertFalse(os.access(part_path, os.F_OK))
+
+    def test_delete_partition_with_failures(self):
+        with mock.patch('swift.obj.replicator.http_connect',
+                        mock_http_connect(200)):
+            df = diskfile.DiskFile(self.devices,
+                                   'sda', '1', 'a', 'c', 'o', FakeLogger())
+            mkdirs(df.datadir)
+            print df.datadir
+            f = open(os.path.join(df.datadir,
+                                  normalize_timestamp(time.time()) + '.data'),
+                     'wb')
+            f.write('1234567890')
+            f.close()
+            ohash = hash_path('a', 'c', 'o')
+            data_dir = ohash[-3:]
+            whole_path_from = os.path.join(self.objects, '1', data_dir)
+            part_path = os.path.join(self.objects, '1')
+            self.assertTrue(os.access(part_path, os.F_OK))
+            nodes = [node for node in
+                     self.ring.get_part_nodes(1)
+                     if node['ip'] not in _ips()]
+            process_arg_checker = []
+            for i, node in enumerate(nodes):
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], 1)
+                if i == 0:
+                    # force one of the rsync calls to fail
+                    ret_code = 1
+                else:
+                    ret_code = 0
+                process_arg_checker.append(
+                    (ret_code, '', ['rsync', whole_path_from, rsync_mod]))
+            with _mock_process(process_arg_checker):
+                self.replicator.replicate()
+            # The path should still exist
+            self.assertTrue(os.access(part_path, os.F_OK))
+
+    def test_delete_partition_with_handoff_delete(self):
+        with mock.patch('swift.obj.replicator.http_connect',
+                        mock_http_connect(200)):
+            self.replicator.handoff_delete = 2
+            df = diskfile.DiskFile(self.devices,
+                                   'sda', '1', 'a', 'c', 'o', FakeLogger())
+            mkdirs(df.datadir)
+            print df.datadir
+            f = open(os.path.join(df.datadir,
+                                  normalize_timestamp(time.time()) + '.data'),
+                     'wb')
+            f.write('1234567890')
+            f.close()
+            ohash = hash_path('a', 'c', 'o')
+            data_dir = ohash[-3:]
+            whole_path_from = os.path.join(self.objects, '1', data_dir)
+            part_path = os.path.join(self.objects, '1')
+            self.assertTrue(os.access(part_path, os.F_OK))
+            nodes = [node for node in
+                     self.ring.get_part_nodes(1)
+                     if node['ip'] not in _ips()]
+            process_arg_checker = []
+            for i, node in enumerate(nodes):
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], 1)
+                if i == 0:
+                    # force one of the rsync calls to fail
+                    ret_code = 1
+                else:
+                    ret_code = 0
+                process_arg_checker.append(
+                    (ret_code, '', ['rsync', whole_path_from, rsync_mod]))
+            with _mock_process(process_arg_checker):
+                self.replicator.replicate()
+            self.assertFalse(os.access(part_path, os.F_OK))
+
+    def test_delete_partition_with_handoff_delete_failures(self):
+        with mock.patch('swift.obj.replicator.http_connect',
+                        mock_http_connect(200)):
+            self.replicator.handoff_delete = 2
+            df = diskfile.DiskFile(self.devices,
+                                   'sda', '1', 'a', 'c', 'o', FakeLogger())
+            mkdirs(df.datadir)
+            print df.datadir
+            f = open(os.path.join(df.datadir,
+                                  normalize_timestamp(time.time()) + '.data'),
+                     'wb')
+            f.write('1234567890')
+            f.close()
+            ohash = hash_path('a', 'c', 'o')
+            data_dir = ohash[-3:]
+            whole_path_from = os.path.join(self.objects, '1', data_dir)
+            part_path = os.path.join(self.objects, '1')
+            self.assertTrue(os.access(part_path, os.F_OK))
+            nodes = [node for node in
+                     self.ring.get_part_nodes(1)
+                     if node['ip'] not in _ips()]
+            process_arg_checker = []
+            for i, node in enumerate(nodes):
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], 1)
+                if i in (0, 1):
+                    # force two of the rsync calls to fail
+                    ret_code = 1
+                else:
+                    ret_code = 0
+                process_arg_checker.append(
+                    (ret_code, '', ['rsync', whole_path_from, rsync_mod]))
+            with _mock_process(process_arg_checker):
+                self.replicator.replicate()
+            # The file should still exist
+            self.assertTrue(os.access(part_path, os.F_OK))
 
     def test_delete_partition_override_params(self):
         df = diskfile.DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o',
@@ -314,15 +447,15 @@ class TestObjectReplicator(unittest.TestCase):
     def test_run_once_recover_from_failure(self):
         replicator = object_replicator.ObjectReplicator(
             dict(swift_dir=self.testdir, devices=self.devices,
-                mount_check='false', timeout='300', stats_interval='1'))
+                 mount_check='false', timeout='300', stats_interval='1'))
         was_connector = object_replicator.http_connect
         try:
             object_replicator.http_connect = mock_http_connect(200)
             # Write some files into '1' and run replicate- they should be moved
             # to the other partitoins and then node should get deleted.
             cur_part = '1'
-            df = diskfile.DiskFile(self.devices, 'sda', cur_part, 'a', 'c', 'o',
-                                   FakeLogger())
+            df = diskfile.DiskFile(
+                self.devices, 'sda', cur_part, 'a', 'c', 'o', FakeLogger())
             mkdirs(df.datadir)
             f = open(os.path.join(df.datadir,
                                   normalize_timestamp(time.time()) + '.data'),
@@ -335,7 +468,7 @@ class TestObjectReplicator(unittest.TestCase):
             process_arg_checker = []
             nodes = [node for node in
                      self.ring.get_part_nodes(int(cur_part))
-                         if node['ip'] not in _ips()]
+                     if node['ip'] not in _ips()]
             for node in nodes:
                 rsync_mod = '%s::object/sda/objects/%s' % (node['ip'],
                                                            cur_part)
@@ -350,16 +483,16 @@ class TestObjectReplicator(unittest.TestCase):
             for i, result in [('0', True), ('1', False),
                               ('2', True), ('3', True)]:
                 self.assertEquals(os.access(
-                        os.path.join(self.objects,
-                                     i, diskfile.HASH_FILE),
-                        os.F_OK), result)
+                    os.path.join(self.objects,
+                                 i, diskfile.HASH_FILE),
+                    os.F_OK), result)
         finally:
             object_replicator.http_connect = was_connector
 
     def test_run_once_recover_from_timeout(self):
         replicator = object_replicator.ObjectReplicator(
             dict(swift_dir=self.testdir, devices=self.devices,
-                mount_check='false', timeout='300', stats_interval='1'))
+                 mount_check='false', timeout='300', stats_interval='1'))
         was_connector = object_replicator.http_connect
         was_get_hashes = object_replicator.get_hashes
         was_execute = tpool.execute
@@ -385,8 +518,8 @@ class TestObjectReplicator(unittest.TestCase):
             # Write some files into '1' and run replicate- they should be moved
             # to the other partitions and then node should get deleted.
             cur_part = '1'
-            df = diskfile.DiskFile(self.devices, 'sda', cur_part, 'a', 'c', 'o',
-                                   FakeLogger())
+            df = diskfile.DiskFile(
+                self.devices, 'sda', cur_part, 'a', 'c', 'o', FakeLogger())
             mkdirs(df.datadir)
             f = open(os.path.join(df.datadir,
                                   normalize_timestamp(time.time()) + '.data'),
@@ -399,7 +532,7 @@ class TestObjectReplicator(unittest.TestCase):
             process_arg_checker = []
             nodes = [node for node in
                      self.ring.get_part_nodes(int(cur_part))
-                         if node['ip'] not in _ips()]
+                     if node['ip'] not in _ips()]
             for node in nodes:
                 rsync_mod = '%s::object/sda/objects/%s' % (node['ip'],
                                                            cur_part)
@@ -464,9 +597,9 @@ class TestObjectReplicator(unittest.TestCase):
             self.assertEquals(mock_http.call_count, len(self.ring._devs) - 1)
             reqs = []
             for node in job['nodes']:
-               reqs.append(mock.call(node['ip'], node['port'], node['device'],
-                                     job['partition'], 'REPLICATE', '',
-                                     headers=self.headers))
+                reqs.append(mock.call(node['ip'], node['port'], node['device'],
+                                      job['partition'], 'REPLICATE', '',
+                                      headers=self.headers))
             if job['partition'] == '0':
                 self.assertEquals(self.replicator.suffix_hash, 0)
             mock_http.assert_has_calls(reqs, any_order=True)
@@ -542,14 +675,14 @@ class TestObjectReplicator(unittest.TestCase):
         self.replicator.update(repl_job)
         reqs = []
         for node in repl_job['nodes']:
-           reqs.append(mock.call(node['replication_ip'],
-                                 node['replication_port'], node['device'],
-                                 repl_job['partition'], 'REPLICATE',
-                                 '', headers=self.headers))
-           reqs.append(mock.call(node['replication_ip'],
-                                 node['replication_port'], node['device'],
-                                 repl_job['partition'], 'REPLICATE',
-                                 '/a83', headers=self.headers))
+            reqs.append(mock.call(node['replication_ip'],
+                                  node['replication_port'], node['device'],
+                                  repl_job['partition'], 'REPLICATE',
+                                  '', headers=self.headers))
+            reqs.append(mock.call(node['replication_ip'],
+                                  node['replication_port'], node['device'],
+                                  repl_job['partition'], 'REPLICATE',
+                                  '/a83', headers=self.headers))
         mock_http.assert_has_calls(reqs, any_order=True)
 
 

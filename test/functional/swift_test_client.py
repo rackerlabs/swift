@@ -28,6 +28,8 @@ from nose import SkipTest
 from xml.dom import minidom
 from swiftclient import get_auth
 
+from test import safe_repr
+
 
 class AuthenticationFailed(Exception):
     pass
@@ -131,12 +133,10 @@ class Connection(object):
         auth_netloc = "%s:%d" % (self.auth_host, self.auth_port)
         auth_url = auth_scheme + auth_netloc + auth_path
 
-        (storage_url, storage_token) = get_auth(auth_url,
-              auth_user, self.password,
-              snet=False,
-              tenant_name=self.account,
-              auth_version=self.auth_version,
-              os_options={})
+        (storage_url, storage_token) = get_auth(
+            auth_url, auth_user, self.password, snet=False,
+            tenant_name=self.account, auth_version=self.auth_version,
+            os_options={})
 
         if not (storage_url and storage_token):
             raise AuthenticationFailed()
@@ -218,18 +218,22 @@ class Connection(object):
 
         self.response = None
         try_count = 0
+        fail_messages = []
         while try_count < 5:
             try_count += 1
 
             try:
                 self.response = try_request()
-            except httplib.HTTPException:
+            except httplib.HTTPException as e:
+                fail_messages.append(safe_repr(e))
                 continue
 
             if self.response.status == 401:
+                fail_messages.append("Response 401")
                 self.authenticate()
                 continue
             elif self.response.status == 503:
+                fail_messages.append("Response 503")
                 if try_count != 5:
                     time.sleep(5)
                 continue
@@ -239,7 +243,11 @@ class Connection(object):
         if self.response:
             return self.response.status
 
-        raise RequestError('Unable to complete http request')
+        request = "{method} {path} headers: {headers} data: {data}".format(
+            method=method, path=path, headers=headers, data=data)
+        raise RequestError('Unable to complete http request: %s. '
+                           'Attempts: %s, Failures: %s' %
+                           (request, len(fail_messages), fail_messages))
 
     def put_start(self, path, hdrs={}, parms={}, cfg={}, chunked=False):
         self.http_connect()
@@ -723,7 +731,7 @@ class File(Base):
                     callback(transferred, self.size)
 
             self.conn.put_end()
-        except socket.timeout, err:
+        except socket.timeout as err:
             raise err
 
         if (self.conn.response.status < 200) or \

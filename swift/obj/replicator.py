@@ -20,7 +20,7 @@ import shutil
 import time
 import itertools
 import cPickle as pickle
-from gettext import gettext as _
+from swift import gettext_ as _
 
 import eventlet
 from eventlet import GreenPool, tpool, Timeout, sleep, hubs
@@ -31,7 +31,7 @@ from swift.common.ring import Ring
 from swift.common.utils import whataremyips, unlink_older_than, \
     compute_eta, get_logger, dump_recon_cache, \
     rsync_ip, mkdirs, config_true_value, list_from_csv, get_hub, \
-    tpool_reraise
+    tpool_reraise, config_auto_int_value
 from swift.common.bufferedhttp import http_connect
 from swift.common.daemon import Daemon
 from swift.common.http import HTTP_OK, HTTP_INSUFFICIENT_STORAGE
@@ -81,6 +81,12 @@ class ObjectReplicator(Daemon):
         self.headers = {
             'Content-Length': '0',
             'user-agent': 'obj-replicator %s' % os.getpid()}
+        self.rsync_error_log_line_length = \
+            int(conf.get('rsync_error_log_line_length', 0))
+        self.handoffs_first = config_true_value(conf.get('handoffs_first',
+                                                         False))
+        self.handoff_delete = config_auto_int_value(
+            conf.get('handoff_delete', 'auto'), 0)
 
     def _rsync(self, args):
         """
@@ -112,8 +118,11 @@ class ObjectReplicator(Daemon):
             else:
                 self.logger.error(result)
         if ret_val:
-            self.logger.error(_('Bad rsync return code: %(ret)d <- %(args)s'),
-                              {'args': str(args), 'ret': ret_val})
+            error_line = _('Bad rsync return code: %(ret)d <- %(args)s') % \
+                {'args': str(args), 'ret': ret_val}
+            if self.rsync_error_log_line_length:
+                error_line = error_line[:self.rsync_error_log_line_length]
+            self.logger.error(error_line)
         elif results:
             self.logger.info(
                 _("Successful rsync of %(src)s at %(dst)s (%(time).03f)"),
@@ -207,8 +216,15 @@ class ObjectReplicator(Daemon):
                                 '/' + '-'.join(suffixes), headers=self.headers)
                             conn.getresponse().read()
                     responses.append(success)
-            if not suffixes or (len(responses) ==
-                                len(job['nodes']) and all(responses)):
+            if self.handoff_delete:
+                # delete handoff if we have had handoff_delete successes
+                delete_handoff = len([resp for resp in responses if resp]) >= \
+                    self.handoff_delete
+            else:
+                # delete handoff if all syncs were successful
+                delete_handoff = len(responses) == len(job['nodes']) and \
+                    all(responses)
+            if not suffixes or delete_handoff:
                 self.logger.info(_("Removing partition: %s"), job['path'])
                 tpool.execute(shutil.rmtree, job['path'], ignore_errors=True)
         except (Exception, Timeout):
@@ -407,6 +423,9 @@ class ObjectReplicator(Daemon):
                 except (ValueError, OSError):
                     continue
         random.shuffle(jobs)
+        if self.handoffs_first:
+            # Move the handoff parts to the front of the list
+            jobs.sort(key=lambda job: not job['delete'])
         self.job_count = len(jobs)
         return jobs
 

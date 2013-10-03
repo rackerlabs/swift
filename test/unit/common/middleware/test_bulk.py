@@ -23,6 +23,7 @@ from StringIO import StringIO
 from mock import patch
 from swift.common.middleware import bulk
 from swift.common.swob import Request, Response, HTTPException
+from swift.common.http import HTTP_NOT_FOUND, HTTP_UNAUTHORIZED
 from swift.common.utils import json
 
 
@@ -35,10 +36,16 @@ class FakeApp(object):
     def __call__(self, env, start_response):
         self.calls += 1
         if env['PATH_INFO'].startswith('/unauth/'):
+            if env['PATH_INFO'].endswith('/c/f_ok'):
+                return Response(status='204 No Content')(env, start_response)
             return Response(status=401)(env, start_response)
         if env['PATH_INFO'].startswith('/create_cont/'):
+            if env['REQUEST_METHOD'] == 'HEAD':
+                return Response(status='404 Not Found')(env, start_response)
             return Response(status='201 Created')(env, start_response)
         if env['PATH_INFO'].startswith('/create_cont_fail/'):
+            if env['REQUEST_METHOD'] == 'HEAD':
+                return Response(status='403 Forbidden')(env, start_response)
             return Response(status='404 Not Found')(env, start_response)
         if env['PATH_INFO'].startswith('/create_obj_unauth/'):
             if env['PATH_INFO'].endswith('/cont'):
@@ -46,6 +53,12 @@ class FakeApp(object):
             return Response(status=401)(env, start_response)
         if env['PATH_INFO'].startswith('/tar_works/'):
             if len(env['PATH_INFO']) > self.max_pathlen:
+                return Response(status='400 Bad Request')(env, start_response)
+            return Response(status='201 Created')(env, start_response)
+        if env['PATH_INFO'].startswith('/tar_works_cont_head_fail/'):
+            if env['REQUEST_METHOD'] == 'HEAD':
+                return Response(status='404 Not Found')(env, start_response)
+            if len(env['PATH_INFO']) > 100:
                 return Response(status='400 Bad Request')(env, start_response)
             return Response(status='201 Created')(env, start_response)
         if env['PATH_INFO'].startswith('/delete_works/'):
@@ -105,12 +118,11 @@ class TestUntar(unittest.TestCase):
     def setUp(self):
         self.app = FakeApp()
         self.bulk = bulk.filter_factory({})(self.app)
-        self.testdir = os.path.join(mkdtemp(), 'tmp_test_bulk')
-        os.mkdir(self.testdir)
+        self.testdir = mkdtemp(suffix='tmp_test_bulk')
 
     def tearDown(self):
         self.app.calls = 0
-        rmtree(self.testdir)
+        rmtree(self.testdir, ignore_errors=1)
 
     def handle_extract_and_iter(self, req, compress_format,
                                 out_content_type='application/json'):
@@ -123,11 +135,13 @@ class TestUntar(unittest.TestCase):
         req = Request.blank('/')
         self.assertEquals(
             self.bulk.create_container(req, '/create_cont/acc/cont'),
-            None)
+            True)
+        self.assertEquals(self.app.calls, 2)
         self.assertRaises(
             bulk.CreateContainerError,
             self.bulk.create_container,
             req, '/create_cont_fail/acc/cont')
+        self.assertEquals(self.app.calls, 3)
 
     def test_extract_tar_works(self):
         # On systems where $TMPDIR is long (like OS X), we need to do this
@@ -296,9 +310,7 @@ class TestUntar(unittest.TestCase):
         self.assertEquals(self.app.calls, 1)
         resp_data = json.loads(resp_body)
         self.assertEquals(resp_data['Response Status'], '401 Unauthorized')
-        self.assertEquals(
-            resp_data['Errors'],
-            [['base_fails1/sub_dir1/sub1_file1', '401 Unauthorized']])
+        self.assertEquals(resp_data['Errors'], [])
 
     def test_extract_tar_fail_obj_401(self):
         self.build_tar()
@@ -393,16 +405,16 @@ class TestUntar(unittest.TestCase):
         with patch.object(self.bulk, 'max_containers', 1):
             self.app.calls = 0
             body = open(os.path.join(self.testdir, 'tar_fails.tar')).read()
-            req = Request.blank('/tar_works/acc/', body=body,
+            req = Request.blank('/tar_works_cont_head_fail/acc/', body=body,
                                 headers={'Accept': 'application/json'})
             req.headers['transfer-encoding'] = 'chunked'
             resp_body = self.handle_extract_and_iter(req, '')
-            self.assertEquals(self.app.calls, 3)
+            self.assertEquals(self.app.calls, 5)
             resp_data = json.loads(resp_body)
             self.assertEquals(resp_data['Response Status'], '400 Bad Request')
             self.assertEquals(
                 resp_data['Response Body'],
-                'More than 1 base level containers in tar.')
+                'More than 1 containers to create from tar.')
 
     def test_extract_tar_fail_create_cont(self):
         dir_tree = [{'base_fails1': [
@@ -417,8 +429,8 @@ class TestUntar(unittest.TestCase):
         req.headers['transfer-encoding'] = 'chunked'
         resp_body = self.handle_extract_and_iter(req, '')
         resp_data = json.loads(resp_body)
-        self.assertEquals(self.app.calls, 4)
-        self.assertEquals(len(resp_data['Errors']), 4)
+        self.assertEquals(self.app.calls, 5)
+        self.assertEquals(len(resp_data['Errors']), 5)
 
     def test_extract_tar_fail_create_cont_value_err(self):
         self.build_tar()
@@ -484,6 +496,29 @@ class TestDelete(unittest.TestCase):
             req, out_content_type=out_content_type))
         return resp_body
 
+    def test_bulk_delete_uses_predefined_object_errors(self):
+        req = Request.blank('/delete_works/AUTH_Acc')
+        objs_to_delete = [
+            {'name': '/c/file_a'},
+            {'name': '/c/file_b', 'error': {'code': HTTP_NOT_FOUND,
+                                            'message': 'not found'}},
+            {'name': '/c/file_c', 'error': {'code': HTTP_UNAUTHORIZED,
+                                            'message': 'unauthorized'}},
+            {'name': '/c/file_d'}]
+        resp_body = ''.join(self.bulk.handle_delete_iter(
+            req, objs_to_delete=objs_to_delete,
+            out_content_type='application/json'))
+        self.assertEquals(
+            self.app.delete_paths, ['/delete_works/AUTH_Acc/c/file_a',
+                                    '/delete_works/AUTH_Acc/c/file_d'])
+        self.assertEquals(self.app.calls, 2)
+        resp_data = json.loads(resp_body)
+        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
+        self.assertEquals(resp_data['Number Deleted'], 2)
+        self.assertEquals(resp_data['Number Not Found'], 1)
+        self.assertEquals(resp_data['Errors'],
+                          [['/c/file_c', 'unauthorized']])
+
     def test_bulk_delete_works(self):
         req = Request.blank('/delete_works/AUTH_Acc', body='/c/f\n/c/f404',
                             headers={'Accept': 'application/json'})
@@ -518,24 +553,25 @@ class TestDelete(unittest.TestCase):
         req.method = 'DELETE'
         req.headers['Transfer-Encoding'] = 'chunked'
         req.headers['Accept'] = 'application/json'
-        req.environ['wsgi.input'] = StringIO('/c/f')
+        req.environ['wsgi.input'] = StringIO('/c/f%20')
         list(self.bulk(req.environ, fake_start_response))  # iterate over resp
         self.assertEquals(
-            self.app.delete_paths, ['/delete_works/AUTH_Acc/c/f'])
+            self.app.delete_paths, ['/delete_works/AUTH_Acc/c/f '])
         self.assertEquals(self.app.calls, 1)
 
     def test_bulk_delete_get_objs(self):
-        req = Request.blank('/delete_works/AUTH_Acc', body='1\r\n2\r\n')
+        req = Request.blank('/delete_works/AUTH_Acc', body='1%20\r\n2\r\n')
         req.method = 'DELETE'
         with patch.object(self.bulk, 'max_deletes_per_request', 2):
             results = self.bulk.get_objs_to_delete(req)
-            self.assertEquals(results, ['1\r', '2\r'])
+            self.assertEquals(results, [{'name': '1 '}, {'name': '2'}])
 
         with patch.object(bulk, 'MAX_PATH_LENGTH', 2):
             results = []
             req.environ['wsgi.input'] = StringIO('1\n2\n3')
             results = self.bulk.get_objs_to_delete(req)
-            self.assertEquals(results, ['1', '2', '3'])
+            self.assertEquals(results,
+                              [{'name': '1'}, {'name': '2'}, {'name': '3'}])
 
         with patch.object(self.bulk, 'max_deletes_per_request', 9):
             with patch.object(bulk, 'MAX_PATH_LENGTH', 1):
@@ -602,14 +638,15 @@ class TestDelete(unittest.TestCase):
         self.assertTrue('400 Bad Request' in resp_body)
 
     def test_bulk_delete_unauth(self):
-        req = Request.blank('/unauth/AUTH_acc/', body='/c/f\n/c/f2\n',
+        req = Request.blank('/unauth/AUTH_acc/', body='/c/f\n/c/f_ok\n',
                             headers={'Accept': 'application/json'})
         req.method = 'DELETE'
         resp_body = self.handle_delete_and_iter(req)
-        self.assertEquals(self.app.calls, 1)
+        self.assertEquals(self.app.calls, 2)
         resp_data = json.loads(resp_body)
         self.assertEquals(resp_data['Errors'], [['/c/f', '401 Unauthorized']])
-        self.assertEquals(resp_data['Response Status'], '401 Unauthorized')
+        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
+        self.assertEquals(resp_data['Number Deleted'], 1)
 
     def test_bulk_delete_500_resp(self):
         req = Request.blank('/broke/AUTH_acc/', body='/c/f\nc/f2\n',
@@ -657,6 +694,22 @@ class TestDelete(unittest.TestCase):
         req.method = 'DELETE'
         resp_body = self.handle_delete_and_iter(req)
         self.assertTrue('400 Bad Request' in resp_body)
+
+    def test_bulk_delete_max_failures(self):
+        req = Request.blank('/unauth/AUTH_Acc', body='/c/f1\n/c/f2\n/c/f3',
+                            headers={'Accept': 'application/json'})
+        req.method = 'DELETE'
+        with patch.object(self.bulk, 'max_failed_deletes', 2):
+            resp_body = self.handle_delete_and_iter(req)
+            self.assertEquals(self.app.calls, 2)
+            resp_data = json.loads(resp_body)
+            self.assertEquals(resp_data['Response Status'], '400 Bad Request')
+            self.assertEquals(resp_data['Response Body'],
+                              'Max delete failures exceeded')
+            self.assertEquals(resp_data['Errors'],
+                              [['/c/f1', '401 Unauthorized'],
+                               ['/c/f2', '401 Unauthorized']])
+
 
 if __name__ == '__main__':
     unittest.main()

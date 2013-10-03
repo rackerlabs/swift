@@ -26,15 +26,12 @@ import threading as stdlib_threading
 import time
 import uuid
 import functools
-from hashlib import md5
-from random import random, shuffle
-from urllib import quote
+from random import random
+from urllib import quote as _quote
 from contextlib import contextmanager, closing
-from gettext import gettext as _
 import ctypes
 import ctypes.util
-from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
-    RawConfigParser
+from ConfigParser import ConfigParser, RawConfigParser
 from optparse import OptionParser
 from Queue import Queue, Empty
 from tempfile import mkstemp, NamedTemporaryFile
@@ -58,6 +55,7 @@ import codecs
 utf8_decoder = codecs.getdecoder('utf-8')
 utf8_encoder = codecs.getencoder('utf-8')
 
+from swift import gettext_ as _
 from swift.common.exceptions import LockTimeout, MessageTimeout
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
 
@@ -79,24 +77,6 @@ _posix_fadvise = None
 # If set to non-zero, fallocate routines will fail based on free space
 # available being at or below this amount, in bytes.
 FALLOCATE_RESERVE = 0
-
-# Used by hash_path to offer a bit more security when generating hashes for
-# paths. It simply appends this value to all paths; guessing the hash a path
-# will end up with would also require knowing this suffix.
-hash_conf = ConfigParser()
-HASH_PATH_SUFFIX = ''
-HASH_PATH_PREFIX = ''
-if hash_conf.read('/etc/swift/swift.conf'):
-    try:
-        HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_suffix')
-    except (NoSectionError, NoOptionError):
-        pass
-    try:
-        HASH_PATH_PREFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_prefix')
-    except (NoSectionError, NoOptionError):
-        pass
 
 
 def backward(f, blocksize=4096):
@@ -162,13 +142,6 @@ def config_auto_int_value(value, default):
 
 def noop_libc_function(*args):
     return 0
-
-
-def validate_configuration():
-    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
-        sys.exit("Error: [swift-hash]: both swift_hash_path_suffix "
-                 "and swift_hash_path_prefix are missing "
-                 "from /etc/swift/swift.conf")
 
 
 def load_libc_function(func_name, log_error=True):
@@ -422,17 +395,6 @@ def drop_buffer_cache(fd, offset, length):
                      % (fd, offset, length, ret))
 
 
-def normalize_timestamp(timestamp):
-    """
-    Format a timestamp (string or numeric) into a standardized
-    xxxxxxxxxx.xxxxx format.
-
-    :param timestamp: unix timestamp
-    :returns: normalized timestamp as a string
-    """
-    return "%016.05f" % (float(timestamp))
-
-
 def mkdirs(path):
     """
     Ensures the path is a directory or makes it if not. Errors if the path
@@ -443,7 +405,7 @@ def mkdirs(path):
     if not os.path.isdir(path):
         try:
             os.makedirs(path)
-        except OSError, err:
+        except OSError as err:
             if err.errno != errno.EEXIST or not os.path.isdir(path):
                 raise
 
@@ -509,28 +471,6 @@ def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
     segs = segs[1:maxsegs]
     segs.extend([None] * (maxsegs - 1 - len(segs)))
     return segs
-
-
-def validate_device_partition(device, partition):
-    """
-    Validate that a device and a partition are valid and won't lead to
-    directory traversal when used.
-
-    :param device: device to validate
-    :param partition: partition to validate
-    :raises: ValueError if given an invalid device or partition
-    """
-    invalid_device = False
-    invalid_partition = False
-    if not device or '/' in device or device in ['.', '..']:
-        invalid_device = True
-    if not partition or '/' in partition or partition in ['.', '..']:
-        invalid_partition = True
-
-    if invalid_device:
-        raise ValueError('Invalid device: %s' % quote(device or ''))
-    elif invalid_partition:
-        raise ValueError('Invalid partition: %s' % quote(partition or ''))
 
 
 class GreenthreadSafeIterator(object):
@@ -920,7 +860,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         log_address = conf.get('log_address', '/dev/log')
         try:
             handler = SysLogHandler(address=log_address, facility=facility)
-        except socket.error, e:
+        except socket.error as e:
             # Either /dev/log isn't a UNIX socket or it does not exist at all
             if e.errno not in [errno.ENOTSOCK, errno.ENOENT]:
                 raise e
@@ -1124,47 +1064,16 @@ def whataremyips():
                 if family not in (netifaces.AF_INET, netifaces.AF_INET6):
                     continue
                 for address in iface_data[family]:
-                    addresses.append(address['addr'])
+                    addr = address['addr']
+
+                    # If we have an ipv6 address remove the
+                    # %ether_interface at the end
+                    if family == netifaces.AF_INET6:
+                        addr = addr.split('%')[0]
+                    addresses.append(addr)
         except ValueError:
             pass
     return addresses
-
-
-def storage_directory(datadir, partition, hash):
-    """
-    Get the storage directory
-
-    :param datadir: Base data directory
-    :param partition: Partition
-    :param hash: Account, container or object hash
-    :returns: Storage directory
-    """
-    return os.path.join(datadir, str(partition), hash[-3:], hash)
-
-
-def hash_path(account, container=None, object=None, raw_digest=False):
-    """
-    Get the canonical hash for an account/container/object
-
-    :param account: Account
-    :param container: Container
-    :param object: Object
-    :param raw_digest: If True, return the raw version rather than a hex digest
-    :returns: hash string
-    """
-    if object and not container:
-        raise ValueError('container is required if object is provided')
-    paths = [account]
-    if container:
-        paths.append(container)
-    if object:
-        paths.append(object)
-    if raw_digest:
-        return md5(HASH_PATH_PREFIX + '/' + '/'.join(paths)
-                   + HASH_PATH_SUFFIX).digest()
-    else:
-        return md5(HASH_PATH_PREFIX + '/' + '/'.join(paths)
-                   + HASH_PATH_SUFFIX).hexdigest()
 
 
 @contextmanager
@@ -1190,7 +1099,7 @@ def lock_path(directory, timeout=10):
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except IOError, err:
+                except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
                 sleep(0.01)
@@ -1225,7 +1134,7 @@ def lock_file(filename, timeout=10, append=False, unlink=True):
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except IOError, err:
+                except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
                 sleep(0.01)
@@ -1285,32 +1194,6 @@ def compute_eta(start_time, current_value, final_value):
     return get_time_units(1.0 / completion * elapsed - elapsed)
 
 
-def iter_devices_partitions(devices_dir, item_type):
-    """
-    Iterate over partitions across all devices.
-
-    :param devices_dir: Path to devices
-    :param item_type: One of 'accounts', 'containers', or 'objects'
-    :returns: Each iteration returns a tuple of (device, partition)
-    """
-    devices = listdir(devices_dir)
-    shuffle(devices)
-    devices_partitions = []
-    for device in devices:
-        partitions = listdir(os.path.join(devices_dir, device, item_type))
-        shuffle(partitions)
-        devices_partitions.append((device, iter(partitions)))
-    yielded = True
-    while yielded:
-        yielded = False
-        for device, partitions in devices_partitions:
-            try:
-                yield device, partitions.next()
-                yielded = True
-            except StopIteration:
-                pass
-
-
 def unlink_older_than(path, mtime):
     """
     Remove any file in a given path that that was last modified before mtime.
@@ -1318,14 +1201,13 @@ def unlink_older_than(path, mtime):
     :param path: path to remove file from
     :mtime: timestamp of oldest file to keep
     """
-    if os.path.exists(path):
-        for fname in listdir(path):
-            fpath = os.path.join(path, fname)
-            try:
-                if os.path.getmtime(fpath) < mtime:
-                    os.unlink(fpath)
-            except OSError:
-                pass
+    for fname in listdir(path):
+        fpath = os.path.join(path, fname)
+        try:
+            if os.path.getmtime(fpath) < mtime:
+                os.unlink(fpath)
+        except OSError:
+            pass
 
 
 def item_from_env(env, item_name):
@@ -1489,7 +1371,7 @@ def write_file(path, contents):
     if not os.path.exists(dirname):
         try:
             os.makedirs(dirname)
-        except OSError, err:
+        except OSError as err:
             if err.errno == errno.EACCES:
                 sys.exit('Unable to create %s.  Running as '
                          'non-root?' % dirname)
@@ -1506,57 +1388,6 @@ def remove_file(path):
         os.unlink(path)
     except OSError:
         pass
-
-
-def audit_location_generator(devices, datadir, suffix='',
-                             mount_check=True, logger=None):
-    '''
-    Given a devices path and a data directory, yield (path, device,
-    partition) for all files in that directory
-
-    :param devices: parent directory of the devices to be audited
-    :param datadir: a directory located under self.devices. This should be
-                    one of the DATADIR constants defined in the account,
-                    container, and object servers.
-    :param suffix: path name suffix required for all names returned
-    :param mount_check: Flag to check if a mount check should be performed
-                    on devices
-    :param logger: a logger object
-    '''
-    device_dir = listdir(devices)
-    # randomize devices in case of process restart before sweep completed
-    shuffle(device_dir)
-    for device in device_dir:
-        if mount_check and not \
-                os.path.ismount(os.path.join(devices, device)):
-            if logger:
-                logger.debug(
-                    _('Skipping %s as it is not mounted'), device)
-            continue
-        datadir_path = os.path.join(devices, device, datadir)
-        if not os.path.exists(datadir_path):
-            continue
-        partitions = listdir(datadir_path)
-        for partition in partitions:
-            part_path = os.path.join(datadir_path, partition)
-            if not os.path.isdir(part_path):
-                continue
-            suffixes = listdir(part_path)
-            for asuffix in suffixes:
-                suff_path = os.path.join(part_path, asuffix)
-                if not os.path.isdir(suff_path):
-                    continue
-                hashes = listdir(suff_path)
-                for hsh in hashes:
-                    hash_path = os.path.join(suff_path, hsh)
-                    if not os.path.isdir(hash_path):
-                        continue
-                    for fname in sorted(listdir(hash_path),
-                                        reverse=True):
-                        if suffix and not fname.endswith(suffix):
-                            continue
-                        path = os.path.join(hash_path, fname)
-                        yield path, device, partition
 
 
 def ratelimit_sleep(running_time, max_rate, incr_by=1, rate_buffer=5):
@@ -1811,7 +1642,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
             finally:
                 try:
                     os.unlink(tf.name)
-                except OSError, err:
+                except OSError as err:
                     if err.errno != errno.ENOENT:
                         raise
     except (Exception, Timeout):
@@ -1821,7 +1652,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
 def listdir(path):
     try:
         return os.listdir(path)
-    except OSError, err:
+    except OSError as err:
         if err.errno != errno.ENOENT:
             raise
     return []
@@ -2010,7 +1841,7 @@ def tpool_reraise(func, *args, **kwargs):
     def inner():
         try:
             return func(*args, **kwargs)
-        except BaseException, err:
+        except BaseException as err:
             return err
     resp = tpool.execute(inner)
     if isinstance(resp, BaseException):
@@ -2083,7 +1914,7 @@ class ThreadPool(object):
             try:
                 result = func(*args, **kwargs)
                 result_queue.put((ev, True, result))
-            except BaseException, err:
+            except BaseException as err:
                 result_queue.put((ev, False, err))
             finally:
                 work_queue.task_done()
@@ -2243,3 +2074,28 @@ def parse_content_type(content_type):
             value = m[1].strip()
             parm_list.append((key, value))
     return content_type, parm_list
+
+
+def override_bytes_from_content_type(listing_dict, logger=None):
+    """
+    Takes a dict from a container listing and overrides the content_type,
+    bytes fields if swift_bytes is set.
+    """
+    content_type, params = parse_content_type(listing_dict['content_type'])
+    for key, value in params:
+        if key == 'swift_bytes':
+            try:
+                listing_dict['bytes'] = int(value)
+            except ValueError:
+                if logger:
+                    logger.exception("Invalid swift_bytes")
+        else:
+            content_type += ';%s=%s' % (key, value)
+    listing_dict['content_type'] = content_type
+
+
+def quote(value, safe='/'):
+    """
+    Patched version of urllib.quote that encodes utf-8 strings before quoting
+    """
+    return _quote(get_valid_utf8_str(value), safe)

@@ -18,11 +18,11 @@ import json
 from paste.deploy import loadapp
 import struct
 from sys import exc_info
-from urllib import quote
 import zlib
-from gettext import gettext as _
+from swift import gettext_ as _
 from zlib import compressobj
 
+from swift.common.utils import quote
 from swift.common.http import HTTP_NOT_FOUND
 from swift.common.swob import Request
 
@@ -36,7 +36,7 @@ class UnexpectedResponse(Exception):
     """
 
     def __init__(self, message, resp):
-        super(UnexpectedResponse, self).__init__(self, message)
+        super(UnexpectedResponse, self).__init__(message)
         self.resp = resp
 
 
@@ -56,14 +56,23 @@ class CompressingFileReader(object):
 
     def __init__(self, file_obj, compresslevel=9, chunk_size=4096):
         self._f = file_obj
+        self.compresslevel = compresslevel
+        self.chunk_size = chunk_size
+        self.set_initial_state()
+
+    def set_initial_state(self):
+        """
+        Sets the object to the state needed for the first read.
+        """
+
+        self._f.seek(0)
         self._compressor = compressobj(
-            compresslevel, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL,
-            0)
+            self.compresslevel, zlib.DEFLATED, -zlib.MAX_WBITS,
+            zlib.DEF_MEM_LEVEL, 0)
         self.done = False
         self.first = True
         self.crc32 = 0
         self.total_size = 0
-        self.chunk_size = chunk_size
 
     def read(self, *a, **kw):
         """
@@ -104,6 +113,11 @@ class CompressingFileReader(object):
         if chunk:
             return chunk
         raise StopIteration
+
+    def seek(self, offset, whence=0):
+        if not (offset == 0 and whence == 0):
+            raise NotImplementedError('Seek implemented on offset 0 only')
+        self.set_initial_state()
 
 
 class InternalClient(object):
@@ -163,7 +177,7 @@ class InternalClient(object):
             sleep(2 ** (attempt + 1))
         if resp:
             raise UnexpectedResponse(
-                _('Unexpected response: %s' % (resp.status,)), resp)
+                _('Unexpected response: %s') % resp.status, resp)
         if exc_type:
             # To make pep8 tool happy, in place of raise t, v, tb:
             raise exc_type(*exc_value.args), None, exc_traceback
@@ -219,10 +233,7 @@ class InternalClient(object):
         :raises Exception: Exception is raised when code fails in an
                            unexpected way.
         """
-        if isinstance(marker, unicode):
-            marker = marker.encode('utf8')
-        if isinstance(end_marker, unicode):
-            end_marker = end_marker.encode('utf8')
+
         while True:
             resp = self.make_request(
                 'GET', '%s?format=json&marker=%s&end_marker=%s' %
@@ -249,15 +260,6 @@ class InternalClient(object):
         :raises ValueError: Is raised if obj is specified and container is
                             not.
         """
-
-        if isinstance(account, unicode):
-            account = account.encode('utf-8')
-
-        if isinstance(container, unicode):
-            container = container.encode('utf-8')
-
-        if isinstance(obj, unicode):
-            obj = obj.encode('utf-8')
 
         path = '/v1/%s' % quote(account)
         if container:

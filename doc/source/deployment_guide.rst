@@ -414,6 +414,19 @@ stats_interval      3600               Interval in seconds between logging
                                        replication statistics
 reclaim_age         604800             Time elapsed in seconds before an
                                        object can be reclaimed
+handoffs_first      false              If set to True, partitions that are
+                                       not supposed to be on the node will be
+                                       replicated first.  The default setting
+                                       should not be changed, except for
+                                       extreme situations.
+handoff_delete      auto               By default handoff partitions will be
+                                       removed when it has successfully
+                                       replicated to all the cannonical nodes.
+                                       If set to an integer n, it will remove
+                                       the partition if it is successfully
+                                       replicated to n nodes.  The default
+                                       setting should not be changed, except
+                                       for extremem situations.
 ==================  =================  =======================================
 
 [object-updater]
@@ -782,6 +795,9 @@ client_chunk_size             65536            Chunk size to read from
                                                clients
 memcache_servers              127.0.0.1:11211  Comma separated list of
                                                memcached servers ip:port
+memcache_max_connections      2                Max number of connections to
+                                               each memcached server per
+                                               worker
 node_timeout                  10               Request timeout to external
                                                services
 client_timeout                60               Timeout to read one chunk
@@ -836,6 +852,13 @@ request_node_count            2 * replicas     Set to the number of nodes to
                                                given times the number of
                                                replicas for the ring being used
                                                for the request.
+swift_owner_headers           <see the sample  These are the headers whose
+                              conf file for    values will only be shown to
+                              the list of      swift_owners. The exact
+                              default          definition of a swift_owner is
+                              headers>         up to the auth system in use,
+                                               but usually indicates
+                                               administrative responsibilities.
 ============================  ===============  =============================
 
 [tempauth]

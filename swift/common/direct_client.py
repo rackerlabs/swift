@@ -22,16 +22,17 @@ import os
 import socket
 from httplib import HTTPException
 from time import time
-from urllib import quote as _quote
 
 from eventlet import sleep, Timeout
 
 from swift.common.bufferedhttp import http_connect
 from swiftclient import ClientException, json_loads
-from swift.common.utils import normalize_timestamp, FileLikeIter
+from swift.common.utils import FileLikeIter
+from swift.common.ondisk import normalize_timestamp
 from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
 from swift.common.swob import HeaderKeyDict
+from swift.common.utils import quote
 
 
 def _get_direct_account_container(path, stype, node, part,
@@ -75,12 +76,6 @@ def _get_direct_account_container(path, stype, node, part,
         resp.read()
         return resp_headers, []
     return resp_headers, json_loads(resp.read())
-
-
-def quote(value, safe='/'):
-    if isinstance(value, unicode):
-        value = value.encode('utf8')
-    return _quote(value, safe)
 
 
 def gen_headers(hdrs_in=None, add_ts=False):
@@ -475,12 +470,12 @@ def retry(func, *args, **kwargs):
         attempts += 1
         try:
             return attempts, func(*args, **kwargs)
-        except (socket.error, HTTPException, Timeout), err:
+        except (socket.error, HTTPException, Timeout) as err:
             if error_log:
                 error_log(err)
             if attempts > retries:
                 raise
-        except ClientException, err:
+        except ClientException as err:
             if error_log:
                 error_log(err)
             if attempts > retries or not is_server_error(err.http_status) or \

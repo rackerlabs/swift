@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Tests for swift.obj.diskfile """
+"""Tests for swift.obj.diskfile"""
 
 from __future__ import with_statement
 
 import cPickle as pickle
 import os
+import errno
 import mock
 import unittest
 import email
-import time
 import tempfile
 from shutil import rmtree
 from time import time
@@ -36,8 +36,9 @@ from eventlet import tpool
 from test.unit import FakeLogger, mock as unit_mock
 from test.unit import _setxattr as setxattr
 from swift.obj import diskfile
-from swift.common import utils
-from swift.common.utils import hash_path, mkdirs, normalize_timestamp
+from swift.common import ondisk
+from swift.common.utils import mkdirs
+from swift.common.ondisk import hash_path, normalize_timestamp
 from swift.common import ring
 from swift.common.exceptions import DiskFileNotExist, DiskFileDeviceUnavailable
 
@@ -72,8 +73,8 @@ def _create_test_ring(path):
 class TestDiskFileModuleMethods(unittest.TestCase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
+        ondisk.HASH_PATH_SUFFIX = 'endcap'
+        ondisk.HASH_PATH_PREFIX = ''
         # Setup a test ring (stolen from common/test_ring.py)
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'node')
@@ -280,14 +281,13 @@ class TestDiskFileModuleMethods(unittest.TestCase):
             i[0] += 1
             return 1
         with unit_mock({'swift.obj.diskfile.getmtime': _getmtime}):
-            diskfile.getmtime("/tmp")
             hashed, hashes = diskfile.get_hashes(
                 part, recalculate=[])
         # getmtime will actually not get called.  Initially, the pickle.load
         # will raise an exception first and later, force_rewrite will
         # short-circuit the if clause to determine whether to write out a
         # fresh hashes_file.
-        self.assertEquals(i[0], 1)
+        self.assertEquals(i[0], 0)
         self.assertTrue('a83' in hashes)
 
     def test_get_hashes_modified(self):
@@ -312,55 +312,124 @@ class TestDiskFileModuleMethods(unittest.TestCase):
                 part, recalculate=['a83'])
         self.assertEquals(i[0], 3)
 
+    def test_hash_cleanup_listdir(self):
+        file_list = []
+
+        def mock_listdir(path):
+            return list(file_list)
+
+        def mock_unlink(path):
+            file_list.remove(os.path.basename(path))
+
+        with unit_mock({'os.listdir': mock_listdir, 'os.unlink': mock_unlink}):
+            # purge .data if there's a newer .ts
+            file1 = normalize_timestamp(time()) + '.data'
+            file2 = normalize_timestamp(time() + 1) + '.ts'
+            file_list = [file1, file2]
+            self.assertEquals(diskfile.hash_cleanup_listdir('/whatever'),
+                              [file2])
+
+            # purge .ts if there's a newer .data
+            file1 = normalize_timestamp(time()) + '.ts'
+            file2 = normalize_timestamp(time() + 1) + '.data'
+            file_list = [file1, file2]
+            self.assertEquals(diskfile.hash_cleanup_listdir('/whatever'),
+                              [file2])
+
+            # keep .meta and .data if meta newer than data
+            file1 = normalize_timestamp(time()) + '.ts'
+            file2 = normalize_timestamp(time() + 1) + '.data'
+            file3 = normalize_timestamp(time() + 2) + '.meta'
+            file_list = [file1, file2, file3]
+            self.assertEquals(diskfile.hash_cleanup_listdir('/whatever'),
+                              [file3, file2])
+
+            # keep only latest of multiple .ts files
+            file1 = normalize_timestamp(time()) + '.ts'
+            file2 = normalize_timestamp(time() + 1) + '.ts'
+            file3 = normalize_timestamp(time() + 2) + '.ts'
+            file_list = [file1, file2, file3]
+            self.assertEquals(diskfile.hash_cleanup_listdir('/whatever'),
+                              [file3])
+
 
 class TestDiskFile(unittest.TestCase):
     """Test swift.obj.diskfile.DiskFile"""
 
     def setUp(self):
-        """ Set up for testing swift.obj.diskfile"""
+        """Set up for testing swift.obj.diskfile"""
         self.testdir = os.path.join(mkdtemp(), 'tmp_test_obj_server_DiskFile')
         mkdirs(os.path.join(self.testdir, 'sda1', 'tmp'))
         self._orig_tpool_exc = tpool.execute
         tpool.execute = lambda f, *args, **kwargs: f(*args, **kwargs)
 
     def tearDown(self):
-        """ Tear down for testing swift.obj.diskfile"""
+        """Tear down for testing swift.obj.diskfile"""
         rmtree(os.path.dirname(self.testdir))
         tpool.execute = self._orig_tpool_exc
 
-    def _create_test_file(self, data, keep_data_fp=True):
-        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger())
+    def _create_ondisk_file(self, df, data, timestamp, ext='.data'):
         mkdirs(df.datadir)
-        f = open(os.path.join(df.datadir,
-                              normalize_timestamp(time()) + '.data'), 'wb')
-        f.write(data)
-        setxattr(f.fileno(), diskfile.METADATA_KEY,
-                 pickle.dumps({}, diskfile.PICKLE_PROTOCOL))
-        f.close()
+        timestamp = normalize_timestamp(timestamp)
+        data_file = os.path.join(df.datadir, timestamp + ext)
+        with open(data_file, 'wb') as f:
+            f.write(data)
+            md = {'X-Timestamp': timestamp}
+            setxattr(f.fileno(), diskfile.METADATA_KEY,
+                     pickle.dumps(md, diskfile.PICKLE_PROTOCOL))
+
+    def _create_test_file(self, data, timestamp=None):
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=keep_data_fp)
+                               FakeLogger())
+        if timestamp is None:
+            timestamp = time()
+        self._create_ondisk_file(df, data, timestamp)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        df.open()
         return df
 
+    def test_get_metadata(self):
+        df = self._create_test_file('1234567890', timestamp=42)
+        md = df.get_metadata()
+        self.assertEquals(md['X-Timestamp'], normalize_timestamp(42))
+
     def test_disk_file_default_disallowed_metadata(self):
-        keep_data_fp = True
+        # build an object with some meta (ts 41)
+        orig_metadata = {'X-Object-Meta-Key1': 'Value1',
+                         'Content-Type': 'text/garbage'}
+        df = self._get_disk_file(ts=41, extra_metadata=orig_metadata)
+        with df.open():
+            self.assertEquals('1024', df._metadata['Content-Length'])
+        # write some new metadata (fast POST, don't send orig meta, ts 42)
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=keep_data_fp)
-        self.assertEquals(df.disallowed_metadata_keys, [])
+                               FakeLogger())
+        df.put_metadata({'X-Timestamp': '42', 'X-Object-Meta-Key2': 'Value2'})
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            # non-fast-post updateable keys are preserved
+            self.assertEquals('text/garbage', df._metadata['Content-Type'])
+            # original fast-post updateable keys are removed
+            self.assert_('X-Object-Meta-Key1' not in df._metadata)
+            # new fast-post updateable keys are added
+            self.assertEquals('Value2', df._metadata['X-Object-Meta-Key2'])
 
     def test_disk_file_app_iter_corners(self):
         df = self._create_test_file('1234567890')
         self.assertEquals(''.join(df.app_iter_range(0, None)), '1234567890')
 
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=True)
-        self.assertEqual(''.join(df.app_iter_range(5, None)), '67890')
+                               FakeLogger())
+        with df.open():
+            self.assertEqual(''.join(df.app_iter_range(5, None)), '67890')
 
     def test_disk_file_app_iter_partial_closes(self):
         df = self._create_test_file('1234567890')
-        it = df.app_iter_range(0, 5)
-        self.assertEqual(''.join(it), '12345')
-        self.assertEqual(df.fp, None)
+        with df.open():
+            it = df.app_iter_range(0, 5)
+            self.assertEqual(''.join(it), '12345')
+            self.assertEqual(df.fp, None)
 
     def test_disk_file_app_iter_ranges(self):
         df = self._create_test_file('012345678911234567892123456789')
@@ -419,16 +488,17 @@ class TestDiskFile(unittest.TestCase):
         self.assertEqual(''.join(it), '')
 
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=True)
-        it = df.app_iter_ranges(None, 'app/something',
-                                '\r\n--someheader\r\n', 150)
-        self.assertEqual(''.join(it), '')
+                               FakeLogger())
+        with df.open():
+            it = df.app_iter_ranges(None, 'app/something',
+                                    '\r\n--someheader\r\n', 150)
+            self.assertEqual(''.join(it), '')
 
     def test_disk_file_mkstemp_creates_dir(self):
         tmpdir = os.path.join(self.testdir, 'sda1', 'tmp')
         os.rmdir(tmpdir)
         with diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c',
-                                    'o', FakeLogger()).writer():
+                               'o', FakeLogger()).create():
             self.assert_(os.path.exists(tmpdir))
 
     def test_iter_hook(self):
@@ -438,21 +508,14 @@ class TestDiskFile(unittest.TestCase):
             hook_call_count[0] += 1
 
         df = self._get_disk_file(fsize=65, csize=8, iter_hook=hook)
-        for _ in df:
-            pass
+        with df.open():
+            for _ in df:
+                pass
 
         self.assertEquals(hook_call_count[0], 9)
 
     def test_quarantine(self):
-        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger())
-        mkdirs(df.datadir)
-        f = open(os.path.join(df.datadir,
-                              normalize_timestamp(time()) + '.data'), 'wb')
-        setxattr(f.fileno(), diskfile.METADATA_KEY,
-                 pickle.dumps({}, diskfile.PICKLE_PROTOCOL))
-        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger())
+        df = self._create_test_file('')  # empty
         df.quarantine()
         quar_dir = os.path.join(self.testdir, 'sda1', 'quarantined',
                                 'objects', os.path.basename(os.path.dirname(
@@ -460,15 +523,7 @@ class TestDiskFile(unittest.TestCase):
         self.assert_(os.path.isdir(quar_dir))
 
     def test_quarantine_same_file(self):
-        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger())
-        mkdirs(df.datadir)
-        f = open(os.path.join(df.datadir,
-                              normalize_timestamp(time()) + '.data'), 'wb')
-        setxattr(f.fileno(), diskfile.METADATA_KEY,
-                 pickle.dumps({}, diskfile.PICKLE_PROTOCOL))
-        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger())
+        df = self._create_test_file('empty')
         new_dir = df.quarantine()
         quar_dir = os.path.join(self.testdir, 'sda1', 'quarantined',
                                 'objects', os.path.basename(os.path.dirname(
@@ -476,31 +531,28 @@ class TestDiskFile(unittest.TestCase):
         self.assert_(os.path.isdir(quar_dir))
         self.assertEquals(quar_dir, new_dir)
         # have to remake the datadir and file
-        mkdirs(df.datadir)
-        f = open(os.path.join(df.datadir,
-                              normalize_timestamp(time()) + '.data'), 'wb')
-        setxattr(f.fileno(), diskfile.METADATA_KEY,
-                 pickle.dumps({}, diskfile.PICKLE_PROTOCOL))
-
+        self._create_ondisk_file(df, '', time())  # still empty
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=True)
+                               FakeLogger())
+        df.open()
         double_uuid_path = df.quarantine()
         self.assert_(os.path.isdir(double_uuid_path))
         self.assert_('-' in os.path.basename(double_uuid_path))
 
     def _get_disk_file(self, invalid_type=None, obj_name='o',
                        fsize=1024, csize=8, mark_deleted=False, ts=None,
-                       iter_hook=None, mount_check=False):
+                       iter_hook=None, mount_check=False,
+                       extra_metadata=None):
         '''returns a DiskFile'''
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c',
-                                    obj_name, FakeLogger())
+                               obj_name, FakeLogger())
         data = '0' * fsize
         etag = md5()
         if ts:
             timestamp = ts
         else:
             timestamp = str(normalize_timestamp(time()))
-        with df.writer() as writer:
+        with df.create() as writer:
             writer.write(data)
             etag.update(data)
             etag = etag.hexdigest()
@@ -509,6 +561,7 @@ class TestDiskFile(unittest.TestCase):
                 'X-Timestamp': timestamp,
                 'Content-Length': str(os.fstat(writer.fd).st_size),
             }
+            metadata.update(extra_metadata or {})
             writer.put(metadata)
             if invalid_type == 'ETag':
                 etag = md5()
@@ -529,10 +582,10 @@ class TestDiskFile(unittest.TestCase):
 
         df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c',
                                obj_name, FakeLogger(),
-                               keep_data_fp=True, disk_chunk_size=csize,
+                               disk_chunk_size=csize,
                                iter_hook=iter_hook, mount_check=mount_check)
+        df.open()
         if invalid_type == 'Zero-Byte':
-            os.remove(df.data_file)
             fp = open(df.data_file, 'w')
             fp.close()
         df.unit_test_len = fsize
@@ -631,27 +684,28 @@ class TestDiskFile(unittest.TestCase):
         df.put_metadata(metadata, tombstone=True)
         exp_name = '%s.ts' % str(normalize_timestamp(ts))
         dl = os.listdir(df.datadir)
-        self.assertEquals(len(dl), 2)
+        self.assertEquals(len(dl), 1)
         self.assertTrue(exp_name in set(dl))
 
-    def test_unlinkold(self):
-        df1 = self._get_disk_file()
-        future_time = str(normalize_timestamp(time() + 100))
-        self._get_disk_file(ts=future_time)
-        self.assertEquals(len(os.listdir(df1.datadir)), 2)
-        df1.unlinkold(future_time)
-        self.assertEquals(len(os.listdir(df1.datadir)), 1)
-        self.assertEquals(os.listdir(df1.datadir)[0], "%s.data" % future_time)
+    def test_delete(self):
+        df = self._get_disk_file()
+        ts = time()
+        df.delete(ts)
+        exp_name = '%s.ts' % str(normalize_timestamp(ts))
+        dl = os.listdir(df.datadir)
+        self.assertEquals(len(dl), 1)
+        self.assertTrue(exp_name in set(dl))
 
     def test_close_error(self):
 
         def err():
             raise Exception("bad")
 
-        df = self._get_disk_file(fsize=1024 * 1024 * 2)
+        df = self._get_disk_file(fsize=1024 * 2)
         df._handle_close_quarantine = err
-        for chunk in df:
-            pass
+        with df.open():
+            for chunk in df:
+                pass
         # close is called at the end of the iterator
         self.assertEquals(df.fp, None)
         self.assertEquals(len(df.logger.log_dict['error']), 1)
@@ -670,3 +724,120 @@ class TestDiskFile(unittest.TestCase):
         with mock.patch("os.path.ismount", _mock_ismount):
             self.assertRaises(DiskFileDeviceUnavailable, self._get_disk_file,
                               mount_check=True)
+
+    def test_ondisk_search_loop_ts_meta_data(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=10)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=9)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=8)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=7)
+        self._create_ondisk_file(df, 'B', ext='.data', timestamp=6)
+        self._create_ondisk_file(df, 'A', ext='.data', timestamp=5)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            self.assertTrue('X-Timestamp' in df._metadata)
+            self.assertEquals(df._metadata['X-Timestamp'],
+                              normalize_timestamp(10))
+            self.assertTrue('deleted' in df._metadata)
+            self.assertTrue(df._metadata['deleted'])
+
+    def test_ondisk_search_loop_meta_ts_data(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=10)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=9)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=8)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=7)
+        self._create_ondisk_file(df, 'B', ext='.data', timestamp=6)
+        self._create_ondisk_file(df, 'A', ext='.data', timestamp=5)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            self.assertTrue('X-Timestamp' in df._metadata)
+            self.assertEquals(df._metadata['X-Timestamp'],
+                              normalize_timestamp(8))
+            self.assertTrue('deleted' in df._metadata)
+
+    def test_ondisk_search_loop_meta_data_ts(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=10)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=9)
+        self._create_ondisk_file(df, 'B', ext='.data', timestamp=8)
+        self._create_ondisk_file(df, 'A', ext='.data', timestamp=7)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=6)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=5)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            self.assertTrue('X-Timestamp' in df._metadata)
+            self.assertEquals(df._metadata['X-Timestamp'],
+                              normalize_timestamp(10))
+            self.assertTrue('deleted' not in df._metadata)
+
+    def test_ondisk_search_loop_data_meta_ts(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        self._create_ondisk_file(df, 'B', ext='.data', timestamp=10)
+        self._create_ondisk_file(df, 'A', ext='.data', timestamp=9)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=8)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=7)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=6)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=5)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            self.assertTrue('X-Timestamp' in df._metadata)
+            self.assertEquals(df._metadata['X-Timestamp'],
+                              normalize_timestamp(10))
+            self.assertTrue('deleted' not in df._metadata)
+
+    def test_ondisk_search_loop_wayward_files_ignored(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        self._create_ondisk_file(df, 'X', ext='.bar', timestamp=11)
+        self._create_ondisk_file(df, 'B', ext='.data', timestamp=10)
+        self._create_ondisk_file(df, 'A', ext='.data', timestamp=9)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=8)
+        self._create_ondisk_file(df, '', ext='.ts', timestamp=7)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=6)
+        self._create_ondisk_file(df, '', ext='.meta', timestamp=5)
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+        with df.open():
+            self.assertTrue('X-Timestamp' in df._metadata)
+            self.assertEquals(df._metadata['X-Timestamp'],
+                              normalize_timestamp(10))
+            self.assertTrue('deleted' not in df._metadata)
+
+    def test_ondisk_search_loop_listdir_error(self):
+        df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                               FakeLogger())
+
+        def mock_listdir_exp(*args, **kwargs):
+            raise OSError(errno.EACCES, os.strerror(errno.EACCES))
+
+        with mock.patch("os.listdir", mock_listdir_exp):
+            self._create_ondisk_file(df, 'X', ext='.bar', timestamp=11)
+            self._create_ondisk_file(df, 'B', ext='.data', timestamp=10)
+            self._create_ondisk_file(df, 'A', ext='.data', timestamp=9)
+            self._create_ondisk_file(df, '', ext='.ts', timestamp=8)
+            self._create_ondisk_file(df, '', ext='.ts', timestamp=7)
+            self._create_ondisk_file(df, '', ext='.meta', timestamp=6)
+            self._create_ondisk_file(df, '', ext='.meta', timestamp=5)
+            df = diskfile.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                                   FakeLogger())
+            self.assertRaises(OSError, df.open)
+
+    def test_exception_in_handle_close_quarantine(self):
+        df = self._get_disk_file()
+
+        def blow_up():
+            raise Exception('a very special error')
+
+        df._handle_close_quarantine = blow_up
+        df.close()
+        log_lines = df.logger.get_lines_for_level('error')
+        self.assert_('a very special error' in log_lines[-1])

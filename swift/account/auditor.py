@@ -15,14 +15,15 @@
 
 import os
 import time
-from gettext import gettext as _
+from swift import gettext_ as _
 from random import random
 
 import swift.common.db
 from swift.account import server as account_server
-from swift.common.db import AccountBroker
-from swift.common.utils import get_logger, audit_location_generator, \
-    config_true_value, dump_recon_cache, ratelimit_sleep
+from swift.account.backend import AccountBroker
+from swift.common.utils import get_logger, config_true_value, \
+    dump_recon_cache, ratelimit_sleep
+from swift.common.ondisk import audit_location_generator
 from swift.common.daemon import Daemon
 
 from eventlet import Timeout
@@ -60,9 +61,8 @@ class AccountAuditor(Daemon):
                                    '%(passed)s passed audit,'
                                    '%(failed)s failed audit'),
                                  {'time': time.ctime(reported),
-                                 'passed': self.account_passes,
-                                 'failed': self.account_failures})
-                self.account_audit(path)
+                                  'passed': self.account_passes,
+                                  'failed': self.account_failures})
                 dump_recon_cache({'account_audits_since': reported,
                                   'account_audits_passed': self.account_passes,
                                   'account_audits_failed':

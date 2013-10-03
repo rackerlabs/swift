@@ -27,17 +27,17 @@ from eventlet import spawn, Timeout, listen
 from swift.obj import updater as object_updater, server as object_server
 from swift.obj.server import ASYNCDIR
 from swift.common.ring import RingData
-from swift.common import utils
-from swift.common.utils import hash_path, normalize_timestamp, mkdirs, \
-    write_pickle
+from swift.common.utils import mkdirs, write_pickle
+from swift.common import ondisk
+from swift.common.ondisk import hash_path, normalize_timestamp
 from test.unit import FakeLogger
 
 
 class TestObjectUpdater(unittest.TestCase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
+        ondisk.HASH_PATH_SUFFIX = 'endcap'
+        ondisk.HASH_PATH_PREFIX = ''
         self.testdir = os.path.join(os.path.dirname(__file__),
                                     'object_updater')
         rmtree(self.testdir, ignore_errors=1)
@@ -46,10 +46,10 @@ class TestObjectUpdater(unittest.TestCase):
         with closing(GzipFile(ring_file, 'wb')) as f:
             pickle.dump(
                 RingData([[0, 1, 0, 1], [1, 0, 1, 0]],
-                         [{'id': 0, 'ip': '127.0.0.1', 'port': 1, 'device': 'sda1',
-                           'zone': 0},
-                          {'id': 1, 'ip': '127.0.0.1', 'port': 1, 'device': 'sda1',
-                           'zone': 2}], 30),
+                         [{'id': 0, 'ip': '127.0.0.1', 'port': 1,
+                           'device': 'sda1', 'zone': 0},
+                          {'id': 1, 'ip': '127.0.0.1', 'port': 1,
+                           'device': 'sda1', 'zone': 2}], 30),
                 f)
         self.devices_dir = os.path.join(self.testdir, 'devices')
         os.mkdir(self.devices_dir)
@@ -175,7 +175,7 @@ class TestObjectUpdater(unittest.TestCase):
                             line.split(':')[1].strip()
                         line = inc.readline()
                     self.assert_('x-container-timestamp' in headers)
-            except BaseException, err:
+            except BaseException as err:
                 return err
             return None
 
@@ -192,7 +192,7 @@ class TestObjectUpdater(unittest.TestCase):
                     err = event.wait()
                     if err:
                         raise err
-            except BaseException, err:
+            except BaseException as err:
                 return err
             return None
 

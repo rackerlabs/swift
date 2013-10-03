@@ -141,7 +141,8 @@ class TestCompressingfileReader(unittest.TestCase):
 
     def test_read(self):
         exp_data = 'abcdefghijklmnopqrstuvwxyz'
-        fobj = internal_client.CompressingFileReader(StringIO(exp_data))
+        fobj = internal_client.CompressingFileReader(
+            StringIO(exp_data), chunk_size=5)
 
         data = ''
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
@@ -149,6 +150,29 @@ class TestCompressingfileReader(unittest.TestCase):
             data += d.decompress(chunk)
 
         self.assertEquals(exp_data, data)
+
+    def test_seek(self):
+        exp_data = 'abcdefghijklmnopqrstuvwxyz'
+        fobj = internal_client.CompressingFileReader(
+            StringIO(exp_data), chunk_size=5)
+
+        # read a couple of chunks only
+        for _ in range(2):
+            fobj.read()
+
+        # read whole thing after seek and check data
+        fobj.seek(0)
+        data = ''
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        for chunk in fobj.read():
+            data += d.decompress(chunk)
+        self.assertEquals(exp_data, data)
+
+    def test_seek_not_implemented_exception(self):
+        fobj = internal_client.CompressingFileReader(
+            StringIO(''), chunk_size=5)
+        self.assertRaises(NotImplementedError, fobj.seek, 10)
+        self.assertRaises(NotImplementedError, fobj.seek, 0, 10)
 
 
 class TestInternalClient(unittest.TestCase):
@@ -283,14 +307,20 @@ class TestInternalClient(unittest.TestCase):
 
             try:
                 client.make_request('GET', '/', {}, (400,))
-            except Exception, err:
+            except Exception as err:
                 pass
             self.assertEquals(200, err.resp.status_int)
             try:
                 client.make_request('GET', '/', {}, (201,))
-            except Exception, err:
+            except Exception as err:
                 pass
             self.assertEquals(200, err.resp.status_int)
+            try:
+                client.make_request('GET', '/', {}, (111,))
+            except Exception as err:
+                self.assertTrue(str(err).startswith('Unexpected response'))
+            else:
+                self.fail("Expected the UnexpectedResponse")
         finally:
             internal_client.sleep = old_sleep
 
@@ -323,7 +353,7 @@ class TestInternalClient(unittest.TestCase):
             internal_client.sleep = not_sleep
             try:
                 client.make_request('PUT', '/', {}, (2,), fobj)
-            except Exception, err:
+            except Exception as err:
                 pass
             self.assertEquals(404, err.resp.status_int)
         finally:

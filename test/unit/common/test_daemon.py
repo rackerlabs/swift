@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: Test kill_children signal handlers
+# TODO(clayg): Test kill_children signal handlers
 
 import os
 import unittest
@@ -23,7 +23,7 @@ from StringIO import StringIO
 from test.unit import tmpfile
 from mock import patch
 
-from swift.common import daemon, utils
+from swift.common import daemon, utils, ondisk
 
 
 class MyDaemon(daemon.Daemon):
@@ -63,8 +63,8 @@ class TestDaemon(unittest.TestCase):
 class TestRunDaemon(unittest.TestCase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = 'startcap'
+        ondisk.HASH_PATH_SUFFIX = 'endcap'
+        ondisk.HASH_PATH_PREFIX = 'startcap'
         utils.drop_privileges = lambda *args: None
         utils.capture_stdio = lambda *args: None
 
@@ -83,9 +83,7 @@ class TestRunDaemon(unittest.TestCase):
         self.assertEquals(d.once_called, True)
 
     def test_run_daemon(self):
-        sample_conf = """[my-daemon]
-user = %s
-""" % getuser()
+        sample_conf = "[my-daemon]\nuser = %s\n" % getuser()
         with tmpfile(sample_conf) as conf_file:
             with patch.dict('os.environ', {'TZ': ''}):
                 daemon.run_daemon(MyDaemon, conf_file)

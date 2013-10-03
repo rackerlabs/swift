@@ -60,7 +60,9 @@ RESPONSE_REASONS = {
     204: ('No Content', ''),
     206: ('Partial Content', ''),
     301: ('Moved Permanently', 'The resource has moved permanently.'),
-    302: ('Found', ''),
+    302: ('Found', 'The resource has moved temporarily.'),
+    303: ('See Other', 'The response to the request can be found under a '
+          'different URI.'),
     304: ('Not Modified', ''),
     307: ('Temporary Redirect', 'The resource has moved temporarily.'),
     400: ('Bad Request', 'The server could not comply with the request since '
@@ -235,7 +237,7 @@ class HeaderEnvironProxy(UserDict.DictMixin):
 
     def keys(self):
         keys = [key[5:].replace('_', '-').title()
-                for key in self.environ.iterkeys() if key.startswith('HTTP_')]
+                for key in self.environ if key.startswith('HTTP_')]
         if 'CONTENT_LENGTH' in self.environ:
             keys.append('Content-Length')
         if 'CONTENT_TYPE' in self.environ:
@@ -248,9 +250,9 @@ class HeaderKeyDict(dict):
     A dict that title-cases all keys on the way in, so as to be
     case-insensitive.
     """
-    def __init__(self, *args, **kwargs):
-        for arg in args:
-            self.update(arg)
+    def __init__(self, base_headers=None, **kwargs):
+        if base_headers:
+            self.update(base_headers)
         self.update(kwargs)
 
     def update(self, other):
@@ -280,6 +282,11 @@ class HeaderKeyDict(dict):
 
     def get(self, key, default=None):
         return dict.get(self, key.title(), default)
+
+    def setdefault(self, key, value=None):
+        if key not in self:
+            self[key] = value
+        return self[key]
 
 
 def _resp_status_property():
@@ -762,10 +769,16 @@ class Request(object):
         self.headers = HeaderEnvironProxy(self.environ)
 
     @classmethod
-    def blank(cls, path, environ=None, headers=None, body=None):
+    def blank(cls, path, environ=None, headers=None, body=None, **kwargs):
         """
         Create a new request object with the given parameters, and an
         environment otherwise filled in with non-surprising default values.
+
+        :param path: encoded, parsed, and unquoted into PATH_INFO
+        :param environ: WSGI environ dictionary
+        :param headers: HTTP headers
+        :param body: stuffed in a StringIO and hung on wsgi.input
+        :param kwargs: any environ key with an property setter
         """
         headers = headers or {}
         environ = environ or {}
@@ -806,6 +819,16 @@ class Request(object):
         req = Request(env)
         for key, val in headers.iteritems():
             req.headers[key] = val
+        for key, val in kwargs.items():
+            prop = getattr(Request, key, None)
+            if prop and isinstance(prop, property):
+                try:
+                    setattr(req, key, val)
+                except AttributeError:
+                    pass
+                else:
+                    continue
+            raise TypeError("got unexpected keyword argument %r" % key)
         return req
 
     @property
@@ -913,7 +936,6 @@ class Request(object):
             ['a', 'c'] = split_path('/a/c', 1, 2)
             ['a', 'c', 'o/r'] = split_path('/a/c/o/r', 1, 3, True)
 
-        :param path: HTTP Request path to be split
         :param minsegs: Minimum number of segments to be extracted
         :param maxsegs: Maximum number of segments to be extracted
         :param rest_with_last: If True, trailing data will be returned as part
@@ -1164,7 +1186,7 @@ def wsgify(func):
         def _wsgify_self(self, env, start_response):
             try:
                 return func(self, Request(env))(env, start_response)
-            except HTTPException, err_resp:
+            except HTTPException as err_resp:
                 return err_resp(env, start_response)
         return _wsgify_self
     else:
@@ -1172,7 +1194,7 @@ def wsgify(func):
         def _wsgify_bare(env, start_response):
             try:
                 return func(Request(env))(env, start_response)
-            except HTTPException, err_resp:
+            except HTTPException as err_resp:
                 return err_resp(env, start_response)
         return _wsgify_bare
 
@@ -1193,7 +1215,9 @@ HTTPAccepted = status_map[202]
 HTTPNoContent = status_map[204]
 HTTPMovedPermanently = status_map[301]
 HTTPFound = status_map[302]
+HTTPSeeOther = status_map[303]
 HTTPNotModified = status_map[304]
+HTTPTemporaryRedirect = status_map[307]
 HTTPBadRequest = status_map[400]
 HTTPUnauthorized = status_map[401]
 HTTPForbidden = status_map[403]
