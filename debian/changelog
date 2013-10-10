@@ -1,3 +1,24 @@
+swift (1.10.0~rax1) lucid; urgency=low
+
+   * 9b521fe CHANGELOG and AUTHORS updates for 1.10.0 release
+   * 221aa9e allow container create even if over account quota
+   * 841b808 Correct URL in readme
+   * 0b37026 Add a Timeout when getting Memcache connections
+   * 6607bea Don't apply timeout to Pool.get operation (leaks)
+   * 9411a24 Revert "Refactor common/utils methods to common/ondisk"
+   * 61e135e Fix bad hash_path reference
+   * 3d8f0f1 Fedora 19: need to use /etc/rc.d/rc.local
+   * db4547d Remove sphinx build warnings
+   * def37fb Stop reading from object server when client disconnects.
+   * 6b67952 assertEquals is deprecated, use assertEqual
+   * fa308d6 Fix utf-8 handling in object versions.
+   * d5fcc9a Two small account-quota fixes
+   * 56440eb Handle X-Copy-From header in container_quota middleware
+   * f72704f Change OpenStack LLC to Foundation
+   * b0aeed1 Fix default replication options for ring-builder add
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 10 Oct 2013 19:35:00 +0000
+
 swift (1.9.2~rax3) lucid; urgency=low
 
    * c117e2d Updated __init__.py with new stuff since last release
