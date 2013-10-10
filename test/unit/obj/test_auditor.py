@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,8 +25,7 @@ from test.unit import FakeLogger
 from swift.obj import auditor
 from swift.obj.diskfile import DiskFile, write_metadata, invalidate_hash
 from swift.obj.server import DATADIR
-from swift.common.utils import mkdirs
-from swift.common.ondisk import hash_path, normalize_timestamp, \
+from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
     storage_directory
 
 

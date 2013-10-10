@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2013 OpenStack, LLC.
+# Copyright (c) 2010-2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,10 +33,9 @@ from eventlet import Timeout
 
 from swift import gettext_ as _
 from swift.common.constraints import check_mount
-from swift.common.utils import mkdirs, renamer, fallocate, fsync, fdatasync, \
-    drop_buffer_cache, ThreadPool, lock_path, write_pickle
-from swift.common.ondisk import hash_path, normalize_timestamp, \
-    storage_directory
+from swift.common.utils import mkdirs, normalize_timestamp, \
+    storage_directory, hash_path, renamer, fallocate, fsync, \
+    fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle
 from swift.common.exceptions import DiskFileError, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
     PathNotDir, DiskFileNotOpenError

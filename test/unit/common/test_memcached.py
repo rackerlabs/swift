@@ -1,5 +1,5 @@
 # -*- coding:utf-8 -*-
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 """Tests for swift.common.utils"""
 
 from __future__ import with_statement
+from collections import defaultdict
 import logging
 import socket
 import time
@@ -27,7 +28,7 @@ from eventlet import GreenPool, sleep, Queue
 from eventlet.pools import Pool
 
 from swift.common import memcached
-from mock import patch
+from mock import patch, MagicMock
 from test.unit import NullLoggingHandler
 
 
@@ -358,10 +359,14 @@ class TestMemcached(unittest.TestCase):
             # track clients waiting for connections
             connected = []
             connections = Queue()
+            errors = []
 
             def wait_connect(addr):
                 connected.append(addr)
-                connections.get()
+                val = connections.get()
+                if val is not None:
+                    errors.append(val)
+
             mock_sock.connect = wait_connect
 
             memcache_client = memcached.MemcacheRing(['1.2.3.4:11211'],
@@ -369,7 +374,7 @@ class TestMemcached(unittest.TestCase):
             # sanity
             self.assertEquals(1, len(memcache_client._client_cache))
             for server, pool in memcache_client._client_cache.items():
-                self.assertEquals(2, pool.max_size)
+                self.assertEqual(2, pool.max_size)
 
             # make 10 requests "at the same time"
             p = GreenPool()
@@ -377,19 +382,91 @@ class TestMemcached(unittest.TestCase):
                 p.spawn(memcache_client.set, 'key', 'value')
             for i in range(3):
                 sleep(0.1)
-                self.assertEquals(2, len(connected))
+                self.assertEqual(2, len(connected))
+
             # give out a connection
             connections.put(None)
+
+            # at this point, only one connection should have actually been
+            # created, the other is in the creation step, and the rest of the
+            # clients are not attempting to connect. we let this play out a
+            # bit to verify.
             for i in range(3):
                 sleep(0.1)
-                self.assertEquals(2, len(connected))
-            # finish up
-            for i in range(8):
-                connections.put(None)
-            self.assertEquals(2, len(connected))
-            p.waitall()
-            self.assertEquals(2, len(connected))
+                self.assertEqual(2, len(connected))
 
+            # finish up, this allows the final connection to be created, so
+            # that all the other clients can use the two existing connections
+            # and no others will be created.
+            connections.put(None)
+            connections.put('nono')
+            self.assertEqual(2, len(connected))
+            p.waitall()
+            self.assertEqual(2, len(connected))
+            self.assertEqual(0, len(errors),
+                             "A client was allowed a third connection")
+            connections.get_nowait()
+            self.assertTrue(connections.empty())
+
+    def test_connection_pool_timeout(self):
+        orig_conn_pool = memcached.MemcacheConnPool
+        try:
+            connections = defaultdict(Queue)
+            pending = defaultdict(int)
+            served = defaultdict(int)
+
+            class MockConnectionPool(orig_conn_pool):
+                def get(self):
+                    pending[self.server] += 1
+                    conn = connections[self.server].get()
+                    pending[self.server] -= 1
+                    return conn
+
+                def put(self, *args, **kwargs):
+                    connections[self.server].put(*args, **kwargs)
+                    served[self.server] += 1
+
+            memcached.MemcacheConnPool = MockConnectionPool
+
+            memcache_client = memcached.MemcacheRing(['1.2.3.4:11211',
+                                                      '1.2.3.5:11211'],
+                                                     io_timeout=0.5,
+                                                     pool_timeout=0.1)
+
+            p = GreenPool()
+            for i in range(10):
+                p.spawn(memcache_client.set, 'key', 'value')
+
+            # let everyone block
+            sleep(0)
+            self.assertEqual(pending['1.2.3.5:11211'], 10)
+
+            # hand out a couple slow connection
+            mock_conn = MagicMock(), MagicMock()
+            mock_conn[1].sendall = lambda x: sleep(0.2)
+            connections['1.2.3.5:11211'].put(mock_conn)
+            connections['1.2.3.5:11211'].put(mock_conn)
+
+            # so far so good, everyone is still waiting
+            sleep(0)
+            self.assertEqual(pending['1.2.3.5:11211'], 8)
+            self.assertEqual(len(memcache_client._errors['1.2.3.5:11211']), 0)
+
+            # but they won't wait longer than pool_timeout
+            mock_conn = MagicMock(), MagicMock()
+            connections['1.2.3.4:11211'].put(mock_conn)
+            connections['1.2.3.4:11211'].put(mock_conn)
+            p.waitall()
+            self.assertEqual(len(memcache_client._errors['1.2.3.5:11211']), 8)
+            self.assertEqual(served['1.2.3.5:11211'], 2)
+            self.assertEqual(len(memcache_client._errors['1.2.3.4:11211']), 0)
+            self.assertEqual(served['1.2.3.4:11211'], 8)
+
+            # and we never got more put in that we gave out
+            self.assertEqual(connections['1.2.3.5:11211'].qsize(), 2)
+            self.assertEqual(connections['1.2.3.4:11211'].qsize(), 2)
+        finally:
+            memcached.MemcacheConnPool = orig_conn_pool
 
 if __name__ == '__main__':
     unittest.main()
