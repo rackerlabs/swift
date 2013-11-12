@@ -71,7 +71,7 @@ def request_init(self, *args, **kwargs):
     _request_instances[self] = None
 
 
-def setup():
+def do_setup(the_object_server):
     utils.HASH_PATH_SUFFIX = 'endcap'
     global _testdir, _test_servers, _test_sockets, \
         _orig_container_listing_limit, _test_coros, _orig_SysLogHandler
@@ -135,8 +135,8 @@ def setup():
     acc2srv = account_server.AccountController(conf)
     con1srv = container_server.ContainerController(conf)
     con2srv = container_server.ContainerController(conf)
-    obj1srv = object_server.ObjectController(conf)
-    obj2srv = object_server.ObjectController(conf)
+    obj1srv = the_object_server.ObjectController(conf)
+    obj2srv = the_object_server.ObjectController(conf)
     _test_servers = \
         (prosrv, acc1srv, acc2srv, con1srv, con2srv, obj1srv, obj2srv)
     nl = NullLogger()
@@ -172,6 +172,10 @@ def setup():
     exp = 'HTTP/1.1 201'
     assert headers[:len(exp)] == exp, "Expected '%s', encountered '%s'" % (
         exp, headers[:len(exp)])
+
+
+def setup():
+    do_setup(object_server)
 
 
 def teardown():
@@ -2903,7 +2907,7 @@ class TestObjectController(unittest.TestCase):
             req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'COPY'},
                                 headers={'Destination': 'c/o'})
             req.account = 'a'
-            set_http_connect(200, 200, 200, 200, 200, 200, 200, 201, 201, 201)
+            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201, 200, 200)
             #                acct cont acct cont objc objc objc obj  obj  obj
             self.app.memcache.store = {}
             resp = controller.COPY(req)
@@ -2915,7 +2919,7 @@ class TestObjectController(unittest.TestCase):
                                 headers={'Destination': 'c/o'})
             req.account = 'a'
             controller.object_name = 'o/o2'
-            set_http_connect(200, 200, 200, 200, 200, 200, 200, 201, 201, 201)
+            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201, 200, 200)
             #                acct cont acct cont objc objc objc obj  obj  obj
             self.app.memcache.store = {}
             resp = controller.COPY(req)
@@ -2926,7 +2930,7 @@ class TestObjectController(unittest.TestCase):
                                 headers={'Destination': '/c/o'})
             req.account = 'a'
             controller.object_name = 'o'
-            set_http_connect(200, 200, 200, 200, 200, 200, 200, 201, 201, 201)
+            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201, 200, 200)
             #                acct cont acct cont objc objc objc obj  obj  obj
             self.app.memcache.store = {}
             resp = controller.COPY(req)
@@ -2938,7 +2942,7 @@ class TestObjectController(unittest.TestCase):
                                 headers={'Destination': '/c/o'})
             req.account = 'a'
             controller.object_name = 'o/o2'
-            set_http_connect(200, 200, 200, 200, 200, 200, 200, 201, 201, 201)
+            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201, 200, 200)
             #                acct cont acct cont objc objc objc obj  obj  obj
             self.app.memcache.store = {}
             resp = controller.COPY(req)
@@ -5147,7 +5151,7 @@ class TestContainerController(unittest.TestCase):
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
             self.assert_status_map(controller.PUT,
-                                   (200, 200, 200, 201, 201, 201), 201,
+                                   (200, 201, 201, 201), 201,
                                    missing_container=True)
 
             self.app.max_containers_per_account = 12345
@@ -5161,7 +5165,7 @@ class TestContainerController(unittest.TestCase):
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
             self.assert_status_map(controller.PUT,
-                                   (200, 200, 200, 201, 201, 201), 201,
+                                   (200, 201, 201, 201), 201,
                                    missing_container=True)
 
     def test_PUT_max_container_name_length(self):
@@ -5170,7 +5174,7 @@ class TestContainerController(unittest.TestCase):
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           '1' * limit)
             self.assert_status_map(controller.PUT,
-                                   (200, 200, 200, 201, 201, 201), 201,
+                                   (200, 201, 201, 201), 201,
                                    missing_container=True)
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           '2' * (limit + 1))
@@ -5255,7 +5259,7 @@ class TestContainerController(unittest.TestCase):
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
             self.app.memcache = MockMemcache(allow_lock=True)
-            set_http_connect(200, 200, 200, 201, 201, 201,
+            set_http_connect(200, 201, 201, 201,
                              missing_container=True)
             req = Request.blank('/a/c', environ={'REQUEST_METHOD': 'PUT'})
             self.app.update_request(req)
@@ -6710,6 +6714,65 @@ class TestSegmentedIterable(unittest.TestCase):
         segit = SegmentedIterable(self.controller, 'lc', listing)
         segit.response = Stub()
         self.assertEquals(''.join(segit.app_iter_range(5, 7)), '34')
+
+
+class TestProxyObjectPerformance(unittest.TestCase):
+
+    def setUp(self):
+        # This is just a simple test that can be used to verify and debug the
+        # various data paths between the proxy server and the object
+        # server. Used as a play ground to debug buffer sizes for sockets.
+        prolis = _test_sockets[0]
+        sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+        # Client is transmitting in 2 MB chunks
+        fd = sock.makefile('wb', 2 * 1024 * 1024)
+        # Small, fast for testing
+        obj_len = 2 * 64 * 1024
+        # Use 1 GB or more for measurements
+        #obj_len = 2 * 512 * 1024 * 1024
+        self.path = '/v1/a/c/o.large'
+        fd.write('PUT %s HTTP/1.1\r\n'
+                 'Host: localhost\r\n'
+                 'Connection: close\r\n'
+                 'X-Storage-Token: t\r\n'
+                 'Content-Length: %s\r\n'
+                 'Content-Type: application/octet-stream\r\n'
+                 '\r\n' % (self.path, str(obj_len)))
+        fd.write('a' * obj_len)
+        fd.flush()
+        headers = readuntil2crlfs(fd)
+        exp = 'HTTP/1.1 201'
+        self.assertEqual(headers[:len(exp)], exp)
+        self.obj_len = obj_len
+
+    def test_GET_debug_large_file(self):
+        for i in range(0, 10):
+            start = time.time()
+
+            prolis = _test_sockets[0]
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            # Client is reading in 2 MB chunks
+            fd = sock.makefile('wb', 2 * 1024 * 1024)
+            fd.write('GET %s HTTP/1.1\r\n'
+                     'Host: localhost\r\n'
+                     'Connection: close\r\n'
+                     'X-Storage-Token: t\r\n'
+                     '\r\n' % self.path)
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 200'
+            self.assertEqual(headers[:len(exp)], exp)
+
+            total = 0
+            while True:
+                buf = fd.read(100000)
+                if not buf:
+                    break
+                total += len(buf)
+            self.assertEqual(total, self.obj_len)
+
+            end = time.time()
+            print "Run %02d took %07.03f" % (i, end - start)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,7 @@ from test.unit import temptree
 import ctypes
 import errno
 import eventlet
+import eventlet.event
 import logging
 import os
 import random
@@ -2440,6 +2441,82 @@ class TestAuditLocationGenerator(unittest.TestCase):
                 tmpdir, "data", mount_check=False
             )
             self.assertEqual(list(locations), [])
+
+    def test_find_objects(self):
+        with temptree([]) as tmpdir:
+            data = os.path.join(tmpdir, "drive", "data")
+            os.makedirs(data)
+            partition = os.path.join(data, "partition2")
+            os.makedirs(partition)
+            suffix = os.path.join(partition, "suffix2")
+            os.makedirs(suffix)
+            hash_path = os.path.join(suffix, "hash2")
+            os.makedirs(hash_path)
+            obj_path = os.path.join(hash_path, "obj1.dat")
+            with open(obj_path, "w"):
+                pass
+            locations = utils.audit_location_generator(
+                tmpdir, "data", ".dat", mount_check=False
+            )
+            self.assertEqual(list(locations),
+                             [(obj_path, "drive", "partition2")])
+
+    def test_ignore_metadata(self):
+        with temptree([]) as tmpdir:
+            data = os.path.join(tmpdir, "drive", "data")
+            os.makedirs(data)
+            partition = os.path.join(data, "partition2")
+            os.makedirs(partition)
+            suffix = os.path.join(partition, "suffix2")
+            os.makedirs(suffix)
+            hash_path = os.path.join(suffix, "hash2")
+            os.makedirs(hash_path)
+            obj_path = os.path.join(hash_path, "obj1.dat")
+            with open(obj_path, "w"):
+                pass
+            meta_path = os.path.join(hash_path, "obj1.meta")
+            with open(meta_path, "w"):
+                pass
+            locations = utils.audit_location_generator(
+                tmpdir, "data", ".dat", mount_check=False
+            )
+            self.assertEqual(list(locations),
+                             [(obj_path, "drive", "partition2")])
+
+
+class TestGreenAsyncPile(unittest.TestCase):
+    def test_runs_everything(self):
+        def run_test():
+            tests_ran[0] += 1
+            return tests_ran[0]
+        tests_ran = [0]
+        pile = utils.GreenAsyncPile(3)
+        for x in xrange(3):
+            pile.spawn(run_test)
+        self.assertEqual(sorted(x for x in pile), [1, 2, 3])
+
+    def test_is_asynchronous(self):
+        def run_test(index):
+            events[index].wait()
+            return index
+
+        pile = utils.GreenAsyncPile(3)
+        for order in ((1, 2, 0), (0, 1, 2), (2, 1, 0), (0, 2, 1)):
+            events = [eventlet.event.Event(), eventlet.event.Event(),
+                      eventlet.event.Event()]
+            for x in xrange(3):
+                pile.spawn(run_test, x)
+            for x in order:
+                events[x].send()
+                self.assertEqual(next(pile), x)
+
+    def test_next_when_empty(self):
+        def run_test():
+            pass
+        pile = utils.GreenAsyncPile(3)
+        pile.spawn(run_test)
+        self.assertEqual(next(pile), None)
+        self.assertRaises(StopIteration, lambda: next(pile))
 
 
 if __name__ == '__main__':

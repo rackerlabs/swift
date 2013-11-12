@@ -32,16 +32,16 @@ import itertools
 from swift import gettext_ as _
 from urllib import quote
 
-from eventlet import spawn_n, GreenPile
-from eventlet.queue import Queue, Empty, Full
+from eventlet import sleep
 from eventlet.timeout import Timeout
 
 from swift.common.wsgi import make_pre_authed_env
 from swift.common.utils import normalize_timestamp, config_true_value, \
     public, split_path, list_from_csv, GreenthreadSafeIterator, \
-    quorum_size
+    quorum_size, GreenAsyncPile
 from swift.common.bufferedhttp import http_connect
-from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
+from swift.common.exceptions import ChunkReadTimeout, ChunkWriteTimeout, \
+    ConnectionTimeout
 from swift.common.http import is_informational, is_success, is_redirection, \
     is_server_error, HTTP_OK, HTTP_PARTIAL_CONTENT, HTTP_MULTIPLE_CHOICES, \
     HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, \
@@ -327,7 +327,7 @@ def _set_info_cache(app, env, account, container, resp):
 
     :param  app: the application object
     :param  account: the unquoted account name
-    :param  container: the unquoted containr name or None
+    :param  container: the unquoted container name or None
     :param resp: the response received or None if info cache should be cleared
     """
 
@@ -778,9 +778,10 @@ class Controller(object):
     def _make_request(self, nodes, part, method, path, headers, query,
                       logger_thread_locals):
         """
-        Sends an HTTP request to a single node and aggregates the result.
-        It attempts the primary node, then iterates over the handoff nodes
-        as needed.
+        Iterates over the given node iterator, sending an HTTP request to one
+        node at a time.  The first non-informational, non-server-error
+        response is returned.  If no non-informational, non-server-error
+        response is received from any of the nodes, returns None.
 
         :param nodes: an iterator of the backend server and handoff servers
         :param part: the partition number
@@ -792,7 +793,7 @@ class Controller(object):
         :param logger_thread_locals: The thread local values to be set on the
                                      self.app.logger to retain transaction
                                      logging information.
-        :returns: a swob.Response object
+        :returns: a swob.Response object, or None if no responses were received
         """
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
@@ -836,17 +837,42 @@ class Controller(object):
         """
         start_nodes = ring.get_part_nodes(part)
         nodes = GreenthreadSafeIterator(self.iter_nodes(ring, part))
-        pile = GreenPile(len(start_nodes))
+        pile = GreenAsyncPile(len(start_nodes))
         for head in headers:
             pile.spawn(self._make_request, nodes, part, method, path,
                        head, query_string, self.app.logger.thread_locals)
-        response = [resp for resp in pile if resp]
+        response = []
+        statuses = []
+        for resp in pile:
+            if not resp:
+                continue
+            response.append(resp)
+            statuses.append(resp[0])
+            if self.have_quorum(statuses, len(start_nodes)):
+                break
         while len(response) < len(start_nodes):
             response.append((HTTP_SERVICE_UNAVAILABLE, '', '', ''))
         statuses, reasons, resp_headers, bodies = zip(*response)
         return self.best_response(req, statuses, reasons, bodies,
                                   '%s %s' % (self.server_type, req.method),
                                   headers=resp_headers)
+
+    def have_quorum(self, statuses, node_count):
+        """
+        Given a list of statuses from several requests, determine if
+        a quorum response can already be decided.
+
+        :param statuses: list of statuses returned
+        :param node_count: number of nodes being queried (basically ring count)
+        :returns: True or False, depending on if quorum is established
+        """
+        quorum = quorum_size(node_count)
+        if len(statuses) >= quorum:
+            for hundred in (HTTP_OK, HTTP_MULTIPLE_CHOICES, HTTP_BAD_REQUEST):
+                if sum(1 for s in statuses
+                       if hundred <= s < hundred + 100) >= quorum:
+                    return True
+        return False
 
     def best_response(self, req, statuses, reasons, bodies, server_type,
                       etag=None, headers=None):
@@ -903,48 +929,6 @@ class Controller(object):
         """
         return self.GETorHEAD(req)
 
-    def _make_app_iter_reader(self, node, source, queue, logger_thread_locals):
-        """
-        Reads from the source and places data in the queue. It expects
-        something else be reading from the queue and, if nothing does within
-        self.app.client_timeout seconds, the process will be aborted.
-
-        :param node: The node dict that the source is connected to, for
-                     logging/error-limiting purposes.
-        :param source: The httplib.Response object to read from.
-        :param queue: The eventlet.queue.Queue to place read source data into.
-        :param logger_thread_locals: The thread local values to be set on the
-                                     self.app.logger to retain transaction
-                                     logging information.
-        """
-        self.app.logger.thread_locals = logger_thread_locals
-        success = True
-        try:
-            try:
-                while True:
-                    with ChunkReadTimeout(self.app.node_timeout):
-                        chunk = source.read(self.app.object_chunk_size)
-                    if not chunk:
-                        break
-                    queue.put(chunk, timeout=self.app.client_timeout)
-            except Full:
-                self.app.logger.warn(
-                    _('Client did not read from queue within %ss') %
-                    self.app.client_timeout)
-                self.app.logger.increment('client_timeouts')
-                success = False
-            except (Exception, Timeout):
-                self.exception_occurred(node, _('Object'),
-                                        _('Trying to read during GET'))
-                success = False
-        finally:
-            # Ensure the queue getter gets a terminator.
-            queue.resize(2)
-            queue.put(success)
-            # Close-out the connection as best as possible.
-            if getattr(source, 'swift_conn', None):
-                self.close_swift_conn(source)
-
     def _make_app_iter(self, node, source):
         """
         Returns an iterator over the contents of the source (via its read
@@ -956,29 +940,49 @@ class Controller(object):
         :param node: The node the source is reading from, for logging purposes.
         """
         try:
-            # Spawn reader to read from the source and place in the queue.
-            # We then drop any reference to the source or node, for garbage
-            # collection purposes.
-            queue = Queue(1)
-            spawn_n(self._make_app_iter_reader, node, source, queue,
-                    self.app.logger.thread_locals)
-            source = node = None
+            nchunks = 0
             while True:
-                chunk = queue.get(timeout=self.app.node_timeout)
-                if isinstance(chunk, bool):  # terminator
-                    success = chunk
-                    if not success:
-                        raise Exception(_('Failed to read all data'
-                                          ' from the source'))
+                with ChunkReadTimeout(self.app.node_timeout):
+                    chunk = source.read(self.app.object_chunk_size)
+                    nchunks += 1
+                if not chunk:
                     break
-                yield chunk
-        except Empty:
-            raise ChunkReadTimeout()
-        except (GeneratorExit, Timeout):
+                with ChunkWriteTimeout(self.app.client_timeout):
+                    yield chunk
+                # This is for fairness; if the network is outpacing the CPU,
+                # we'll always be able to read and write data without
+                # encountering an EWOULDBLOCK, and so eventlet will not switch
+                # greenthreads on its own. We do it manually so that clients
+                # don't starve.
+                #
+                # The number 5 here was chosen by making stuff up. It's not
+                # every single chunk, but it's not too big either, so it seemed
+                # like it would probably be an okay choice.
+                #
+                # Note that we may trampoline to other greenthreads more often
+                # than once every 5 chunks, depending on how blocking our
+                # network IO is; the explicit sleep here simply provides a
+                # lower bound on the rate of trampolining.
+                if nchunks % 5 == 0:
+                    sleep()
+        except ChunkReadTimeout:
+            self.exception_occurred(node, _('Object'),
+                                    _('Trying to read during GET'))
+            raise
+        except ChunkWriteTimeout:
+            self.app.logger.warn(
+                _('Client did not read from proxy within %ss') %
+                self.app.client_timeout)
+            self.app.logger.increment('client_timeouts')
+        except GeneratorExit:
             self.app.logger.warn(_('Client disconnected on read'))
         except Exception:
             self.app.logger.exception(_('Trying to send to client'))
             raise
+        finally:
+            # Close-out the connection as best as possible.
+            if getattr(source, 'swift_conn', None):
+                self.close_swift_conn(source)
 
     def close_swift_conn(self, src):
         """

@@ -13,19 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# NOTE: swift_conn
-# You'll see swift_conn passed around a few places in this file. This is the
-# source httplib connection of whatever it is attached to.
-#   It is used when early termination of reading from the connection should
-# happen, such as when a range request is satisfied but there's still more the
-# source connection would like to send. To prevent having to read all the data
-# that could be left, the source connection can be .close() and then reads
-# commence to empty out any buffers.
-#   These shenanigans are to ensure all related objects can be garbage
-# collected. We've seen objects hang around forever otherwise.
-
 import mimetypes
 import os
+import socket
 from swift import gettext_ as _
 from random import shuffle
 from time import time
@@ -160,6 +150,18 @@ class Application(object):
         self.swift_owner_headers = [
             name.strip()
             for name in swift_owner_headers.split(',') if name.strip()]
+        # Initialization was successful, so now apply the client chunk size
+        # parameter as the default read / write buffer size for the network
+        # sockets.
+        #
+        # NOTE WELL: This is a class setting, so until we get set this on a
+        # per-connection basis, this affects reading and writing on ALL
+        # sockets, those between the proxy servers and external clients, and
+        # those between the proxy servers and the other internal servers.
+        #
+        # ** Because it affects the client as well, currently, we use the
+        # client chunk size as the govenor and not the object chunk size.
+        socket._fileobject.default_bufsize = self.client_chunk_size
 
     def get_controller(self, path):
         """
@@ -194,6 +196,11 @@ class Application(object):
         try:
             if self.memcache is None:
                 self.memcache = cache_from_env(env)
+            # Remove any x-backend-* headers since those are reserved for use
+            # by backends communicating with each other; no end user should be
+            # able to send those into the cluster.
+            for key in list(k for k in env if k.startswith('HTTP_X_BACKEND_')):
+                del env[key]
             req = self.update_request(Request(env))
             return self.handle_request(req)(env, start_response)
         except UnicodeError:

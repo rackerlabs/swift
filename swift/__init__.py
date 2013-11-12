@@ -16,7 +16,6 @@
 import os
 import gettext
 
-
 class Version(object):
     def __init__(self, canonical_version, final):
         self.canonical_version = canonical_version
@@ -30,7 +29,7 @@ class Version(object):
             return '%s-dev' % (self.canonical_version,)
 
 
-_version = Version('1.10.0', False)
+_version = Version('1.10.0.60.g41e1a53', False)
 __version__ = _version.pretty_version
 __canonical_version__ = _version.canonical_version
 

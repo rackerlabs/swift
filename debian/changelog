@@ -1,5 +1,43 @@
 swift (1.10.0~rax1) lucid; urgency=low
 
+   * 6152391 Remove redundant hash check
+   * a80c720 Object replication ssync (an rsync alternative)
+   * 845b8be Default region loading an old-style pickled ring
+   * f0c0855 early quorum responses
+   * 729430f Alternate DiskFile constructor for efficient auditing.
+   * 68025b8 Fix up sphinx docs for *make_request* methods
+   * 26483a2 Add more stuff to SAIO doc's proxy pipeline.
+   * 429cb8b Fix swift_test_client duplicating request params
+   * f63b58f Fix deprecation warning.
+   * b20bab4 Remove unnecessary swift_conn comments
+   * 023a061 Tie socket write buffer size to server parameters
+   * fc9f9d7 Strengthen account tests
+   * f52d96b Quarantine objects with busted metadata.
+   * 97b5f59 HEAD on account returns 410 if account was deleted and not yet reaped
+   * 0717133 Make pbr a build-time only dependency
+   * 56c902c form post over XMLHttpRequest (cors) broken
+   * d6c65c3 catch decompression errors
+   * a454d12 Update my mailmap
+   * 0a26bb2 Simplify callers of diskfile.[read|write]_metadata()
+   * b48435c Fix UnboundLocalError on account PUT
+   * abcecd2 utf8 encode tempurl key
+   * 2664f58 Add colon after service name
+   * cd2e7df Add an __str__ method to brokers
+   * 9807a35 Add WWW-Authenticate to 401 responses
+   * ed5101b Adding more unit tests for audit_location_generator
+   * 5202b0e DiskFile API, with reference implementation
+   * a4e25d6 Proxy: use just one greenthread per client
+   * a0017e0 Removes vim comment
+   * d4c6587 return value on memcache client decr call
+   * 9c226e3 Small optimization to container_quotas
+   * b61add1 Small efficiency improvement in account quotas
+   * 2419df2 Fix 500 from account-quota middleware
+   * 9b521fe CHANGELOG and AUTHORS updates for 1.10.0 releas
+
+ -- Greg Lange <glange@rackspace.com>  Tue, 12 Nov 2013 19:19:37 +0000
+
+swift (1.10.0~rax1) lucid; urgency=low
+
    * 9b521fe CHANGELOG and AUTHORS updates for 1.10.0 release
    * 221aa9e allow container create even if over account quota
    * 841b808 Correct URL in readme
@@ -1055,14 +1093,14 @@ swift (1.4.4-4) lucid; urgency=low
 swift (1.4.4-3) lucid; urgency=low
 
     * [Made from http://gitbhub.com/openstack/swift commit f643a58d32b45068ee106444eae90ba0e0d2280c]
-    
+
     * Fixes to prevent socket hoarding
 
  -- dfg <david.goetz@rackspace.com>  Tue, 22 Nov 2011 15:18:37 -0800
 
 swift (1.4.4-2) lucid; urgency=low
 
-    * manpages fix 
+    * manpages fix
 
  -- dfg <david.goetz@rackspace.com>  Fri, 18 Nov 2011 08:13:16 -0800
 
@@ -2413,7 +2451,7 @@ swift (1.0.99+1.1.0rc1-1.1) unstable; urgency=low
 swift (1.0.99+1.1.0rc1-1) unstable; urgency=low
 
   * New upstream release.
-  * Updated to standards version 3.9.1. 
+  * Updated to standards version 3.9.1.
   * Use jquery package to provide jquery.js.
   * Updated some of the control file to make lintian happy.
 
@@ -2453,7 +2491,7 @@ swift (1.0.2-3) unstable; urgency=low
   * Add rsync and remove duplicate net-tools dependency.
   * Added Jay Payne to uploaders.
   * Added Greg Holt to uploaders.
-  * Updated VCS location to use UDD locations. 
+  * Updated VCS location to use UDD locations.
   * We actually depend on 1.0 of sphinx.
 
  -- Monty Taylor <mordred@inaugust.com>  Tue, 24 Aug 2010 00:02:00 -0700

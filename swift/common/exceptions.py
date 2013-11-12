@@ -30,15 +30,15 @@ class SwiftException(Exception):
     pass
 
 
-class AuditException(SwiftException):
-    pass
-
-
 class DiskFileError(SwiftException):
     pass
 
 
-class DiskFileNotOpenError(DiskFileError):
+class DiskFileNotOpen(DiskFileError):
+    pass
+
+
+class DiskFileQuarantined(DiskFileError):
     pass
 
 
@@ -47,6 +47,10 @@ class DiskFileCollision(DiskFileError):
 
 
 class DiskFileNotExist(DiskFileError):
+    pass
+
+
+class DiskFileDeleted(DiskFileNotExist):
     pass
 
 
@@ -113,4 +117,8 @@ class ListingIterNotAuthorized(ListingIterError):
 
 
 class SegmentError(SwiftException):
+    pass
+
+
+class ReplicationException(Exception):
     pass
