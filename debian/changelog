@@ -1,3 +1,34 @@
+swift (1.10.0.103.g890eede~rax1) lucid; urgency=low
+
+   * 91deed8 Use a more portable errno in tests.
+   * c859ebf Per device replication_lock
+   * f564863 Get retry.
+   * b5b0b78 Remove obsolete future imports
+   * 4cb5e2f Simple fix for proxy-logging empty field handling
+   * 4ed1c84 Handle optional arguments for run_forever()
+   * b9efe1c add an "inline" query parameter to tempurl
+   * a410730 Do not format messages before they are logged
+   * 62b87fc Fixed locale test in the presence of LANGUAGE
+   * 700479b Fix DB locked error on commit
+   * 4f6d89a Import filter and app into namespace correctly
+   * ef7f9e2 Fixed concurrent PUT requests to accounts or containers
+   * 94090e8 Use POST in bulk-delete
+   * 63370ea Quiet all locale warnings and dummy thread, too
+   * c2c2a14 Replace httplib with bufferedhttp in sphinx docs
+   * b1f51d0 Use utils.ismount in place of os.path.ismount
+   * 092eb56 minor fix to unittest fake error
+   * 304fb34 Fix UnboundLocalError on container PUT
+   * 8255810 Add swiftsync.
+   * b468f79 Fix test to work with mock 0.8.0
+   * fd4843f catch OSError to prevent breaking request /recon/diskusage
+   * 985c7bf Fix probe test
+   * 691fa2c Remove some WebOb leftovers.
+   * dde5105 Fix quarantine, error counts in audit logs
+   * 2647661 improve docs in etc/dispersion.conf-sample
+   * 6342cb3 Handle COPY verb in account quota middleware
+
+ -- Greg Holt <gholt@rackspace.com>  Mon, 25 Nov 2013 19:18:23 +0000
+
 swift (1.10.0~rax1) lucid; urgency=low
 
    * 6152391 Remove redundant hash check
