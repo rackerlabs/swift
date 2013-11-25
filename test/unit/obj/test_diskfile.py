@@ -16,8 +16,6 @@
 
 """Tests for swift.obj.diskfile"""
 
-from __future__ import with_statement
-
 import cPickle as pickle
 import os
 import errno
@@ -41,7 +39,8 @@ from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp
 from swift.common import ring
 from swift.common.exceptions import DiskFileNotExist, DiskFileQuarantined, \
-    DiskFileDeviceUnavailable, DiskFileDeleted, DiskFileNotOpen, DiskFileError
+    DiskFileDeviceUnavailable, DiskFileDeleted, DiskFileNotOpen, \
+    DiskFileError, ReplicationLockTimeout
 
 
 def _create_test_ring(path):
@@ -414,7 +413,7 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
         def mock_ismount(path):
             return path.endswith('sdp')
 
-        with mock.patch('os.path.ismount', mock_ismount):
+        with mock.patch('swift.obj.diskfile.ismount', mock_ismount):
             with temptree([]) as tmpdir:
                 os.makedirs(os.path.join(tmpdir, "sdp", "objects",
                                          "2607", "df3",
@@ -451,7 +450,7 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
         def splode_if_endswith(suffix):
             def sploder(path):
                 if path.endswith(suffix):
-                    raise OSError(errno.ELIBBAD, "don't try to ad-lib")
+                    raise OSError(errno.EACCES, "don't try to ad-lib")
                 else:
                     return real_listdir(path)
             return sploder
@@ -466,6 +465,72 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
                 self.assertRaises(OSError, list_locations, tmpdir)
             with mock.patch('os.listdir', splode_if_endswith("b54")):
                 self.assertRaises(OSError, list_locations, tmpdir)
+
+
+class TestDiskFileManager(unittest.TestCase):
+
+    def setUp(self):
+        self.testdir = os.path.join(mkdtemp(), 'tmp_test_obj_server_DiskFile')
+        mkdirs(os.path.join(self.testdir, 'sda1', 'tmp'))
+        mkdirs(os.path.join(self.testdir, 'sda2', 'tmp'))
+        self._orig_tpool_exc = tpool.execute
+        tpool.execute = lambda f, *args, **kwargs: f(*args, **kwargs)
+        self.conf = dict(devices=self.testdir, mount_check='false',
+                         keep_cache_size=2 * 1024)
+        self.df_mgr = diskfile.DiskFileManager(self.conf, FakeLogger())
+
+    def test_replication_lock_on(self):
+        # Double check settings
+        self.df_mgr.replication_one_per_device = True
+        self.df_mgr.replication_lock_timeout = 0.1
+        dev_path = os.path.join(self.testdir, 'sda1')
+        with self.df_mgr.replication_lock(dev_path):
+            lock_exc = None
+            exc = None
+            try:
+                with self.df_mgr.replication_lock(dev_path):
+                    raise Exception(
+                        '%r was not replication locked!' % dev_path)
+            except ReplicationLockTimeout as err:
+                lock_exc = err
+            except Exception as err:
+                exc = err
+            self.assertTrue(lock_exc is not None)
+            self.assertTrue(exc is None)
+
+    def test_replication_lock_off(self):
+        # Double check settings
+        self.df_mgr.replication_one_per_device = False
+        self.df_mgr.replication_lock_timeout = 0.1
+        dev_path = os.path.join(self.testdir, 'sda1')
+        with self.df_mgr.replication_lock(dev_path):
+            lock_exc = None
+            exc = None
+            try:
+                with self.df_mgr.replication_lock(dev_path):
+                    raise Exception(
+                        '%r was not replication locked!' % dev_path)
+            except ReplicationLockTimeout as err:
+                lock_exc = err
+            except Exception as err:
+                exc = err
+            self.assertTrue(lock_exc is None)
+            self.assertTrue(exc is not None)
+
+    def test_replication_lock_another_device_fine(self):
+        # Double check settings
+        self.df_mgr.replication_one_per_device = True
+        self.df_mgr.replication_lock_timeout = 0.1
+        dev_path = os.path.join(self.testdir, 'sda1')
+        dev_path2 = os.path.join(self.testdir, 'sda2')
+        with self.df_mgr.replication_lock(dev_path):
+            lock_exc = None
+            try:
+                with self.df_mgr.replication_lock(dev_path2):
+                    pass
+            except ReplicationLockTimeout as err:
+                lock_exc = err
+            self.assertTrue(lock_exc is None)
 
 
 class TestDiskFile(unittest.TestCase):
