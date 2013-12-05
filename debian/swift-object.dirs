@@ -1,4 +1,3 @@
 /var/log/swift
-/var/log/swift/stats
 /var/run/swift
 /var/cache/swift
