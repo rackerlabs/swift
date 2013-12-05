@@ -1,3 +1,41 @@
+swift (1.10.0.170.g30c0c08~rax1) lucid; urgency=low
+
+   * 74b51c9 fix expired object deletion
+   * b57fd43 use diskfile in ssync_sender tests
+   * f5ba1ca Remove ssync iter_hook usage
+   * 33706cb Add option to return disk usage report with byte suffix.
+   * 9b38463 Fixed DB test cases on PyPy
+   * bdcf6ad Remove Python 3.3 from list of tox environments
+   * 93d63dc GreenDBConnection no longer assumes that arguments are kwargs
+   * 69102b5 Some functional tests for dynamic large objects
+   * 0d45e99 Expose bulk-operation limits in /info.
+   * 8a64bff Report transaction ID in failure exceptions
+   * d4e02a2 Add accurate timestamps in proxy log
+   * e0147e6 Add a unit test to verify proxy logging fields
+   * 87cd559 Account for a platform difference in semaphores
+   * 3c7c355 Use TCP_NODELAY for created sockets.
+   * 39032c3 Add HTML reporting for test branch coverage.
+   * 0ba071f Fix bug in obj updater run_once().
+   * edc9f62 Report path information in failure exceptions
+   * 71d1805 bare excepts, as is proper
+   * cdb6cd8 add bare except to catch errors
+   * 853853e Push cooperative sleep call down into ThreadPool
+   * 6e313e9 Fix for memcache middleware configuration
+   * 15c31c0 Remove unnecessary "is not None" check
+   * 2c0bbaf Protect against hash cleanup errors on PUTs
+   * 7207926 slightly less early quorum
+   * fa1f7d9 Use upstream patched Pool.get
+   * 2c4bf81 Added discoverable capabilities.
+   * 14c5b54 test: improve db_replicator coverage
+   * 9e80fd4 Add a DebugLogger for wsgi server tests
+   * 934354f workaround probetest race from early response
+   * 37e0654 in case you lose your builder backups
+   * 9151bcc Reorganize SLO unit tests
+   * 2e1fc74 Some functional tests for static large objects
+   * ef42c0f allow bare excepts in flake8
+
+ -- Greg Holt <gholt@rackspace.com>  Thu,  5 Dec 2013 20:02:53 +0000
+
 swift (1.10.0.103.g890eede~rax1) lucid; urgency=low
 
    * 91deed8 Use a more portable errno in tests.
