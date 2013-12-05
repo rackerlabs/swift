@@ -2,9 +2,6 @@
 
 #DEBHELPER#
 
-if [ -d /var/log/swift/stats ]; then
-    chown swift:swift /var/log/swift/stats
-fi
 if [ -d /var/cache/swift ]; then
     chown swift:swift /var/cache/swift
 fi
