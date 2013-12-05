@@ -17,6 +17,7 @@
 
 import errno
 import fcntl
+import hmac
 import operator
 import os
 import pwd
@@ -26,7 +27,7 @@ import threading as stdlib_threading
 import time
 import uuid
 import functools
-from hashlib import md5
+from hashlib import md5, sha1
 from random import random, shuffle
 from urllib import quote as _quote
 from contextlib import contextmanager, closing
@@ -98,6 +99,78 @@ if hash_conf.read('/etc/swift/swift.conf'):
                                          'swift_hash_path_prefix')
     except (NoSectionError, NoOptionError):
         pass
+
+
+def get_hmac(request_method, path, expires, key):
+    """
+    Returns the hexdigest string of the HMAC-SHA1 (RFC 2104) for
+    the request.
+
+    :param request_method: Request method to allow.
+    :param path: The path to the resource to allow access to.
+    :param expires: Unix timestamp as an int for when the URL
+                    expires.
+    :param key: HMAC shared secret.
+
+    :returns: hexdigest str of the HMAC-SHA1 for the request.
+    """
+    return hmac.new(
+        key, '%s\n%s\n%s' % (request_method, expires, path), sha1).hexdigest()
+
+
+# Used by get_swift_info and register_swift_info to store information about
+# the swift cluster.
+_swift_info = {}
+_swift_admin_info = {}
+
+
+def get_swift_info(admin=False, disallowed_sections=None):
+    """
+    Returns information about the swift cluster that has been previously
+    registered with the register_swift_info call.
+
+    :param admin: boolean value, if True will additionally return an 'admin'
+                  section with information previously registered as admin
+                  info.
+    :param disallowed_sections: list of section names to be withheld from the
+                                information returned.
+    :returns: dictionary of information about the swift cluster.
+    """
+    disallowed_sections = disallowed_sections or []
+    info = {}
+    for section in _swift_info:
+        if section in disallowed_sections:
+            continue
+        info[section] = dict(_swift_info[section].items())
+    if admin:
+        info['admin'] = dict(_swift_admin_info)
+        info['admin']['disallowed_sections'] = list(disallowed_sections)
+    return info
+
+
+def register_swift_info(name='swift', admin=False, **kwargs):
+    """
+    Registers information about the swift cluster to be retrieved with calls
+    to get_swift_info.
+
+    :param name: string, the section name to place the information under.
+    :param admin: boolean, if True, information will be registered to an
+                  admin section which can optionally be withheld when
+                  requesting the information.
+    :param kwargs: key value arguments representing the information to be
+                   added.
+    """
+    if name == 'admin' or name == 'disallowed_sections':
+        raise ValueError('\'{0}\' is reserved name.'.format(name))
+
+    if admin:
+        dict_to_use = _swift_admin_info
+    else:
+        dict_to_use = _swift_info
+    if name not in dict_to_use:
+        dict_to_use[name] = {}
+    for key, val in kwargs.iteritems():
+        dict_to_use[name][key] = val
 
 
 def backward(f, blocksize=4096):
@@ -1595,6 +1668,10 @@ class ContextPool(GreenPool):
             coro.kill()
 
 
+class GreenAsyncPileWaitallTimeout(Timeout):
+    pass
+
+
 class GreenAsyncPile(object):
     """
     Runs jobs in a pool of green threads, and the results can be retrieved by
@@ -1626,6 +1703,22 @@ class GreenAsyncPile(object):
         """
         self._inflight += 1
         self._pool.spawn(self._run_func, func, args, kwargs)
+
+    def waitall(self, timeout):
+        """
+        Wait timeout seconds for any results to come in.
+
+        :param timeout: seconds to wait for results
+        :returns: list of results accrued in that time
+        """
+        results = []
+        try:
+            with GreenAsyncPileWaitallTimeout(timeout):
+                while True:
+                    results.append(self.next())
+        except (GreenAsyncPileWaitallTimeout, StopIteration):
+            pass
+        return results
 
     def __iter__(self):
         return self
@@ -2164,14 +2257,18 @@ class ThreadPool(object):
 
         Exceptions thrown will be reraised in the calling thread.
 
-        If the threadpool was initialized with nthreads=0, just calls
-        func(*args, **kwargs).
+        If the threadpool was initialized with nthreads=0, it invokes
+        func(*args, **kwargs) directly, followed by eventlet.sleep() to ensure
+        the eventlet hub has a chance to execute. It is more likely the hub
+        will be invoked when queuing operations to an external thread.
 
         :returns: result of calling func
         :raises: whatever func raises
         """
         if self.nthreads <= 0:
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            sleep()
+            return result
 
         ev = event.Event()
         self._run_queue.put((ev, func, args, kwargs), block=False)

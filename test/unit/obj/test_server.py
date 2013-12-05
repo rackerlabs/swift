@@ -27,8 +27,11 @@ from time import gmtime, strftime, time
 from tempfile import mkdtemp
 from hashlib import md5
 
-from eventlet import sleep, spawn, wsgi, listen, Timeout
-from test.unit import FakeLogger
+from eventlet import sleep, spawn, wsgi, listen, Timeout, tpool
+
+from nose import SkipTest
+
+from test.unit import FakeLogger, debug_logger
 from test.unit import connect_tcp, readuntil2crlfs
 from swift.obj import server as object_server
 from swift.obj import diskfile
@@ -36,7 +39,6 @@ from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
     NullLogger, storage_directory, public, replication
 from swift.common import constraints
-from eventlet import tpool
 from swift.common.swob import Request, HeaderKeyDict
 
 
@@ -55,7 +57,8 @@ class TestObjectController(unittest.TestCase):
             os.path.join(mkdtemp(), 'tmp_test_object_server_ObjectController')
         mkdirs(os.path.join(self.testdir, 'sda1', 'tmp'))
         conf = {'devices': self.testdir, 'mount_check': 'false'}
-        self.object_controller = object_server.ObjectController(conf)
+        self.object_controller = object_server.ObjectController(
+            conf, logger=debug_logger())
         self.object_controller.bytes_per_sync = 1
         self._orig_tpool_exc = tpool.execute
         tpool.execute = lambda f, *args, **kwargs: f(*args, **kwargs)
@@ -2584,6 +2587,62 @@ class TestObjectController(unittest.TestCase):
         finally:
             object_server.time.time = orig_time
 
+    def test_DELETE_if_delete_at_expired_still_deletes(self):
+        test_time = time() + 10
+        test_timestamp = normalize_timestamp(test_time)
+        delete_at_time = int(test_time + 10)
+        delete_at_timestamp = str(delete_at_time)
+        delete_at_container = str(
+            delete_at_time /
+            self.object_controller.expiring_objects_container_divisor *
+            self.object_controller.expiring_objects_container_divisor)
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': test_timestamp,
+                     'X-Delete-At': delete_at_timestamp,
+                     'X-Delete-At-Container': delete_at_container,
+                     'Content-Length': '4',
+                     'Content-Type': 'application/octet-stream'})
+        req.body = 'TEST'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+
+        # sanity
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+            headers={'X-Timestamp': test_timestamp})
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.body, 'TEST')
+        objfile = os.path.join(
+            self.testdir, 'sda1',
+            storage_directory(diskfile.DATADIR, 'p',
+                              hash_path('a', 'c', 'o')),
+            test_timestamp + '.data')
+        self.assert_(os.path.isfile(objfile))
+
+        # move time past expirery
+        with mock.patch('swift.obj.diskfile.time') as mock_time:
+            mock_time.time.return_value = test_time + 100
+            req = Request.blank(
+                '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'GET'},
+                headers={'X-Timestamp': test_timestamp})
+            resp = req.get_response(self.object_controller)
+            # request will 404
+            self.assertEquals(resp.status_int, 404)
+            # but file still exists
+            self.assert_(os.path.isfile(objfile))
+
+            # make the x-if-delete-at with all the right bits
+            req = Request.blank(
+                '/sda1/p/a/c/o',
+                environ={'REQUEST_METHOD': 'DELETE'},
+                headers={'X-Timestamp': delete_at_timestamp,
+                         'X-If-Delete-At': delete_at_timestamp})
+            resp = req.get_response(self.object_controller)
+            self.assertEquals(resp.status_int, 404)
+            self.assertFalse(os.path.isfile(objfile))
+
     def test_DELETE_if_delete_at(self):
         test_time = time() + 10000
         req = Request.blank(
@@ -2825,8 +2884,14 @@ class TestObjectController(unittest.TestCase):
         object_server.global_conf_callback(preloaded_app_conf, global_conf)
         self.assertEqual(preloaded_app_conf, {})
         self.assertEqual(global_conf.keys(), ['replication_semaphore'])
-        self.assertEqual(
-            global_conf['replication_semaphore'][0].get_value(), 4)
+        try:
+            value = global_conf['replication_semaphore'][0].get_value()
+        except NotImplementedError:
+            # On some operating systems (at a minimum, OS X) it's not possible
+            # to introspect the value of a semaphore
+            raise SkipTest
+        else:
+            self.assertEqual(value, 4)
 
     def test_global_conf_callback_replication_semaphore(self):
         preloaded_app_conf = {'replication_concurrency': 123}

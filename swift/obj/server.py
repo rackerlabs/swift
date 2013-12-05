@@ -34,7 +34,7 @@ from swift.common.constraints import check_object_creation, \
     check_float, check_utf8
 from swift.common.exceptions import ConnectionTimeout, DiskFileQuarantined, \
     DiskFileNotExist, DiskFileCollision, DiskFileNoSpace, DiskFileDeleted, \
-    DiskFileDeviceUnavailable
+    DiskFileDeviceUnavailable, DiskFileExpired
 from swift.obj import ssync_receiver
 from swift.common.http import is_success
 from swift.common.request_helpers import split_and_validate_path
@@ -50,14 +50,14 @@ from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFileManager
 class ObjectController(object):
     """Implements the WSGI application for the Swift Object Server."""
 
-    def __init__(self, conf):
+    def __init__(self, conf, logger=None):
         """
         Creates a new WSGI application for the Swift Object Server. An
         example configuration is given at
         <source-dir>/etc/object-server.conf-sample or
         /etc/swift/object-server.conf-sample.
         """
-        self.logger = get_logger(conf, log_route='object-server')
+        self.logger = logger or get_logger(conf, log_route='object-server')
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
@@ -407,7 +407,6 @@ class ObjectController(object):
                         return HTTPRequestTimeout(request=request)
                     etag.update(chunk)
                     upload_size = writer.write(chunk)
-                    sleep()
                     elapsed_time += time.time() - start_time
                 if upload_size:
                     self.logger.transfer_rate(
@@ -505,8 +504,7 @@ class ObjectController(object):
                               ('X-Auth-Token' not in request.headers and
                                'X-Storage-Token' not in request.headers))
                 response = Response(
-                    app_iter=disk_file.reader(
-                        iter_hook=sleep, keep_cache=keep_cache),
+                    app_iter=disk_file.reader(keep_cache=keep_cache),
                     request=request, conditional_response=True)
                 response.headers['Content-Type'] = metadata.get(
                     'Content-Type', 'application/octet-stream')
@@ -584,6 +582,10 @@ class ObjectController(object):
             return HTTPInsufficientStorage(drive=device, request=request)
         try:
             orig_metadata = disk_file.read_metadata()
+        except DiskFileExpired as e:
+            orig_timestamp = e.timestamp
+            orig_metadata = e.metadata
+            response_class = HTTPNotFound
         except DiskFileDeleted as e:
             orig_timestamp = e.timestamp
             orig_metadata = {}

@@ -56,7 +56,7 @@ from swift.common.utils import mkdirs, normalize_timestamp, \
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
     DiskFileDeleted, DiskFileError, DiskFileNotOpen, PathNotDir, \
-    ReplicationLockTimeout
+    ReplicationLockTimeout, DiskFileExpired
 from swift.common.swob import multi_range_iterator
 
 
@@ -662,7 +662,10 @@ class DiskFileWriter(object):
         # After the rename completes, this object will be available for other
         # requests to reference.
         renamer(self._tmppath, target_path)
-        hash_cleanup_listdir(self._datadir)
+        try:
+            hash_cleanup_listdir(self._datadir)
+        except OSError:
+            logging.exception(_('Problem cleaning up %s'), self._datadir)
 
     def put(self, metadata):
         """
@@ -713,12 +716,11 @@ class DiskFileReader(object):
     :param device_path: on-disk device path, used when quarantining an obj
     :param logger: logger caller wants this object to use
     :param quarantine_hook: 1-arg callable called w/reason when quarantined
-    :param iter_hook: called when __iter__ returns a chunk
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
     def __init__(self, fp, data_file, obj_size, etag, threadpool,
                  disk_chunk_size, keep_cache_size, device_path, logger,
-                 quarantine_hook, iter_hook=None, keep_cache=False):
+                 quarantine_hook, keep_cache=False):
         # Parameter tracking
         self._fp = fp
         self._data_file = data_file
@@ -729,7 +731,6 @@ class DiskFileReader(object):
         self._device_path = device_path
         self._logger = logger
         self._quarantine_hook = quarantine_hook
-        self._iter_hook = iter_hook
         if keep_cache:
             # Caller suggests we keep this in cache, only do it if the
             # object's size is less than the maximum.
@@ -767,8 +768,6 @@ class DiskFileReader(object):
                                          self._bytes_read - dropped_cache)
                         dropped_cache = self._bytes_read
                     yield chunk
-                    if self._iter_hook:
-                        self._iter_hook()
                 else:
                     self._read_to_eof = True
                     self._drop_cache(self._fp.fileno(), dropped_cache,
@@ -1016,12 +1015,12 @@ class DiskFile(object):
 
         :param data_file: full path of data file to quarantine
         :param msg: reason for quarantining to be included in the exception
-        :raises DiskFileQuarantined:
+        :returns: DiskFileQuarantined exception object
         """
         self._quarantined_dir = self._threadpool.run_in_thread(
             quarantine_renamer, self._device_path, data_file)
         self._logger.increment('quarantines')
-        raise DiskFileQuarantined(msg)
+        return DiskFileQuarantined(msg)
 
     def _get_ondisk_file(self):
         """
@@ -1051,7 +1050,7 @@ class DiskFile(object):
             if err.errno == errno.ENOTDIR:
                 # If there's a file here instead of a directory, quarantine
                 # it; something's gone wrong somewhere.
-                self._quarantine(
+                raise self._quarantine(
                     # hack: quarantine_renamer actually renames the directory
                     # enclosing the filename you give it, but here we just
                     # want this one file and not its parent.
@@ -1114,15 +1113,14 @@ class DiskFile(object):
                 # we don't have a data file so we are just going to raise an
                 # exception that we could not find the object, providing the
                 # tombstone's timestamp.
-                exc = DiskFileDeleted()
-                exc.timestamp = metadata['X-Timestamp']
+                exc = DiskFileDeleted(metadata=metadata)
         return exc
 
     def _verify_name_matches_hash(self, data_file):
         hash_from_fs = os.path.basename(self._datadir)
         hash_from_name = hash_path(self._name.lstrip('/'))
         if hash_from_fs != hash_from_name:
-            self._quarantine(
+            raise self._quarantine(
                 data_file,
                 "Hash of name in metadata does not match directory name")
 
@@ -1137,7 +1135,7 @@ class DiskFile(object):
                    verify the on-disk size with Content-Length metadata value
         :raises DiskFileCollision: if the metadata stored name does not match
                                    the referenced name of the file
-        :raises DiskFileNotExist: if the object has expired
+        :raises DiskFileExpired: if the object has expired
         :raises DiskFileQuarantined: if data inconsistencies were detected
                                      between the metadata and the file-system
                                      metadata
@@ -1145,7 +1143,7 @@ class DiskFile(object):
         try:
             mname = self._metadata['name']
         except KeyError:
-            self._quarantine(data_file, "missing name metadata")
+            raise self._quarantine(data_file, "missing name metadata")
         else:
             if mname != self._name:
                 self._logger.error(
@@ -1161,21 +1159,21 @@ class DiskFile(object):
         except ValueError:
             # Quarantine, the x-delete-at key is present but not an
             # integer.
-            self._quarantine(
+            raise self._quarantine(
                 data_file, "bad metadata x-delete-at value %s" % (
                     self._metadata['X-Delete-At']))
         else:
             if x_delete_at <= time.time():
-                raise DiskFileNotExist('Expired')
+                raise DiskFileExpired(metadata=self._metadata)
         try:
             metadata_size = int(self._metadata['Content-Length'])
         except KeyError:
-            self._quarantine(
+            raise self._quarantine(
                 data_file, "missing content-length in metadata")
         except ValueError:
             # Quarantine, the content-length key is present but not an
             # integer.
-            self._quarantine(
+            raise self._quarantine(
                 data_file, "bad metadata content-length value %s" % (
                     self._metadata['Content-Length']))
         fd = fp.fileno()
@@ -1183,11 +1181,11 @@ class DiskFile(object):
             statbuf = os.fstat(fd)
         except OSError as err:
             # Quarantine, we can't successfully stat the file.
-            self._quarantine(data_file, "not stat-able: %s" % err)
+            raise self._quarantine(data_file, "not stat-able: %s" % err)
         else:
             obj_size = statbuf.st_size
-        if metadata_size is not None and obj_size != metadata_size:
-            self._quarantine(
+        if obj_size != metadata_size:
+            raise self._quarantine(
                 data_file, "metadata content-length %s does"
                 " not match actual object size %s" % (
                     metadata_size, statbuf.st_size))
@@ -1200,8 +1198,9 @@ class DiskFile(object):
         try:
             return read_metadata(source)
         except Exception as err:
-            self._quarantine(quarantine_filename,
-                             "Exception reading metadata: %s" % err)
+            raise self._quarantine(
+                quarantine_filename,
+                "Exception reading metadata: %s" % err)
 
     def _construct_from_data_file(self, data_file, meta_file):
         """
@@ -1259,7 +1258,7 @@ class DiskFile(object):
         with self.open():
             return self.get_metadata()
 
-    def reader(self, iter_hook=None, keep_cache=False,
+    def reader(self, keep_cache=False,
                _quarantine_hook=lambda m: None):
         """
         Return a :class:`swift.common.swob.Response` class compatible
@@ -1269,7 +1268,6 @@ class DiskFile(object):
         For this implementation, the responsibility of closing the open file
         is passed to the :class:`swift.obj.diskfile.DiskFileReader` object.
 
-        :param iter_hook: called when __iter__ returns a chunk
         :param keep_cache: caller's preference for keeping data read in the
                            OS buffer cache
         :param _quarantine_hook: 1-arg callable called when obj quarantined;
@@ -1282,8 +1280,7 @@ class DiskFile(object):
             self._fp, self._data_file, int(self._metadata['Content-Length']),
             self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
             self._mgr.keep_cache_size, self._device_path, self._logger,
-            quarantine_hook=_quarantine_hook,
-            iter_hook=iter_hook, keep_cache=keep_cache)
+            quarantine_hook=_quarantine_hook, keep_cache=keep_cache)
         # At this point the reader object is now responsible for closing
         # the file pointer.
         self._fp = None

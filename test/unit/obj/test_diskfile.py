@@ -790,19 +790,6 @@ class TestDiskFile(unittest.TestCase):
         df.unit_test_len = fsize
         return df
 
-    def test_iter_hook(self):
-        hook_call_count = [0]
-
-        def hook():
-            hook_call_count[0] += 1
-
-        df = self._get_open_disk_file(fsize=65, csize=8)
-        with df.open():
-            for _ in df.reader(iter_hook=hook):
-                pass
-
-        self.assertEquals(hook_call_count[0], 9)
-
     def test_keep_cache(self):
         df = self._get_open_disk_file(fsize=65)
         with mock.patch("swift.obj.diskfile.drop_buffer_cache") as foo:
@@ -1589,6 +1576,24 @@ class TestDiskFile(unittest.TestCase):
         df = self.df_mgr.get_diskfile('sda1', '0', 'a', 'c', 'o')
         with df.open():
             self.assertEqual(df.timestamp, '1383181759.12345')
+
+    def test_error_in_hashdir_cleanup_listdir(self):
+
+        def mock_hcl(*args, **kwargs):
+            raise OSError()
+
+        df = self._get_open_disk_file()
+        ts = time()
+        with mock.patch("swift.obj.diskfile.hash_cleanup_listdir",
+                        mock_hcl):
+            try:
+                df.delete(ts)
+            except OSError:
+                self.fail("OSError raised when it should have been swallowed")
+        exp_name = '%s.ts' % str(normalize_timestamp(ts))
+        dl = os.listdir(df._datadir)
+        self.assertEquals(len(dl), 2)
+        self.assertTrue(exp_name in set(dl))
 
 
 if __name__ == '__main__':

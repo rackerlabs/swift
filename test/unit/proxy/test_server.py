@@ -34,12 +34,13 @@ from eventlet import sleep, spawn, wsgi, listen
 import simplejson
 
 from test.unit import connect_tcp, readuntil2crlfs, FakeLogger, \
-    fake_http_connect, FakeRing, FakeMemcache
+    fake_http_connect, FakeRing, FakeMemcache, debug_logger
 from swift.proxy import server as proxy_server
 from swift.account import server as account_server
 from swift.container import server as container_server
 from swift.obj import server as object_server
 from swift.common import ring
+from swift.common.middleware import proxy_logging
 from swift.common.exceptions import ChunkReadTimeout, SegmentError
 from swift.common.constraints import MAX_META_NAME_LENGTH, \
     MAX_META_VALUE_LENGTH, MAX_META_COUNT, MAX_META_OVERALL_SIZE, \
@@ -129,17 +130,26 @@ def do_setup(the_object_server):
                      {'id': 1, 'zone': 1, 'device': 'sdb1', 'ip': '127.0.0.1',
                       'port': obj2lis.getsockname()[1]}], 30),
                     f)
-    prosrv = proxy_server.Application(conf, FakeMemcacheReturnsNone())
-    acc1srv = account_server.AccountController(conf)
-    acc2srv = account_server.AccountController(conf)
-    con1srv = container_server.ContainerController(conf)
-    con2srv = container_server.ContainerController(conf)
-    obj1srv = the_object_server.ObjectController(conf)
-    obj2srv = the_object_server.ObjectController(conf)
+    prosrv = proxy_server.Application(conf, FakeMemcacheReturnsNone(),
+                                      logger=debug_logger('proxy'))
+    acc1srv = account_server.AccountController(
+        conf, logger=debug_logger('acct1'))
+    acc2srv = account_server.AccountController(
+        conf, logger=debug_logger('acct2'))
+    con1srv = container_server.ContainerController(
+        conf, logger=debug_logger('cont1'))
+    con2srv = container_server.ContainerController(
+        conf, logger=debug_logger('cont2'))
+    obj1srv = the_object_server.ObjectController(
+        conf, logger=debug_logger('obj1'))
+    obj2srv = the_object_server.ObjectController(
+        conf, logger=debug_logger('obj2'))
     _test_servers = \
         (prosrv, acc1srv, acc2srv, con1srv, con2srv, obj1srv, obj2srv)
     nl = NullLogger()
-    prospa = spawn(wsgi.server, prolis, prosrv, nl)
+    logging_prosv = proxy_logging.ProxyLoggingMiddleware(prosrv, conf,
+                                                         logger=prosrv.logger)
+    prospa = spawn(wsgi.server, prolis, logging_prosv, nl)
     acc1spa = spawn(wsgi.server, acc1lis, acc1srv, nl)
     acc2spa = spawn(wsgi.server, acc2lis, acc2srv, nl)
     con1spa = spawn(wsgi.server, con1lis, con1srv, nl)
@@ -639,6 +649,34 @@ class TestProxyServer(unittest.TestCase):
             exp_sorted = [{'region': 1, 'zone': 2, 'ip': '127.0.0.2'},
                           {'region': 2, 'zone': 1, 'ip': '127.0.0.1'}]
             self.assertEquals(exp_sorted, app_sorted)
+
+    def test_info_defaults(self):
+        app = proxy_server.Application({}, FakeMemcache(),
+                                       account_ring=FakeRing(),
+                                       container_ring=FakeRing(),
+                                       object_ring=FakeRing())
+
+        self.assertTrue(app.expose_info)
+        self.assertTrue(isinstance(app.disallowed_sections, list))
+        self.assertEqual(0, len(app.disallowed_sections))
+        self.assertTrue(app.admin_key is None)
+
+    def test_get_info_controller(self):
+        path = '/info'
+        app = proxy_server.Application({}, FakeMemcache(),
+                                       account_ring=FakeRing(),
+                                       container_ring=FakeRing(),
+                                       object_ring=FakeRing())
+
+        controller, path_parts = app.get_controller(path)
+
+        self.assertTrue('version' in path_parts)
+        self.assertTrue(path_parts['version'] is None)
+        self.assertTrue('disallowed_sections' in path_parts)
+        self.assertTrue('expose_info' in path_parts)
+        self.assertTrue('admin_key' in path_parts)
+
+        self.assertEqual(controller.__name__, 'InfoController')
 
 
 class TestObjectController(unittest.TestCase):
@@ -4634,6 +4672,7 @@ class TestObjectController(unittest.TestCase):
         fd.read(1)
         fd.close()
         sock.close()
+        sleep(0)  # let eventlet do it's thing
         # Make sure the GC is run again for pythons without reference counting
         for i in xrange(4):
             gc.collect()
