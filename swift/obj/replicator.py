@@ -124,8 +124,10 @@ class ObjectReplicator(Daemon):
                 results = proc.stdout.read()
                 ret_val = proc.wait()
         except Timeout:
+            self.logger.increment('rsync.kill')
             self.logger.error(_("Killing long-running rsync: %s"), str(args))
             proc.kill()
+
             return 1  # failure response code
         total_time = time.time() - start_time
         for result in results.split('\n'):
@@ -151,6 +153,7 @@ class ObjectReplicator(Daemon):
             self.logger.debug(
                 _("Successful rsync of %(src)s at %(dst)s (%(time).03f)"),
                 {'src': args[-2], 'dst': args[-1], 'time': total_time})
+        self.logger.timing_since('rsync.runtime', start_time)
         return ret_val
 
     def rsync(self, node, job, suffixes):
@@ -178,11 +181,13 @@ class ObjectReplicator(Daemon):
         else:
             rsync_module = '%s::object' % node_ip
         had_any = False
+        sflist_start = time.time()
         for suffix in suffixes:
             spath = join(job['path'], suffix)
             if os.path.exists(spath):
                 args.append(spath)
                 had_any = True
+        self.logger.timing_since('rsync.sflist_build', sflist_start)
         if not had_any:
             return False
         args.append(join(rsync_module, node['device'],
@@ -220,18 +225,23 @@ class ObjectReplicator(Daemon):
         begin = time.time()
         try:
             responses = []
+            getsf_start = time.time()
             suffixes = tpool.execute(tpool_get_suffixes, job['path'])
+            self.logger.timing_since('delete.get_suffixes_time', getsf_start)
             if suffixes:
                 for node in job['nodes']:
                     success = self.sync(node, job, suffixes)
                     if success:
                         with Timeout(self.http_timeout):
+                            success_start = time.time()
                             conn = http_connect(
                                 node['replication_ip'],
                                 node['replication_port'],
                                 node['device'], job['partition'], 'REPLICATE',
                                 '/' + '-'.join(suffixes), headers=self.headers)
                             conn.getresponse().read()
+                            self.logger.timing_since('delete.success_check',
+                                                     success_start)
                     responses.append(success)
             if self.handoff_delete:
                 # delete handoff if we have had handoff_delete successes
@@ -243,8 +253,11 @@ class ObjectReplicator(Daemon):
                     all(responses)
             if not suffixes or delete_handoff:
                 self.logger.info(_("Removing partition: %s"), job['path'])
+                rm_start = time.time()
                 tpool.execute(shutil.rmtree, job['path'], ignore_errors=True)
+                self.logger.timing_since('partition.delete.rmtree', rm_start)
         except (Exception, Timeout):
+            self.logger.increment('partition.delete.timeout')
             self.logger.exception(_("Error syncing handoff partition"))
         finally:
             self.partition_times.append(time.time() - begin)
@@ -260,10 +273,12 @@ class ObjectReplicator(Daemon):
         self.logger.increment('partition.update.count.%s' % (job['device'],))
         begin = time.time()
         try:
+            hashed_start = time.time()
             hashed, local_hash = tpool_reraise(
                 get_hashes, job['path'],
                 do_listdir=(self.replication_count % 10) == 0,
                 reclaim_age=self.reclaim_age)
+            self.logger.timing_since('update.hashes', hashed_start)
             self.suffix_hash += hashed
             self.logger.update_stats('suffix.hashes', hashed)
             attempts_left = len(job['nodes'])
@@ -276,6 +291,7 @@ class ObjectReplicator(Daemon):
                 attempts_left -= 1
                 try:
                     with Timeout(self.http_timeout):
+                        remote_hash_start = time.time()
                         resp = http_connect(
                             node['replication_ip'], node['replication_port'],
                             node['device'], job['partition'], 'REPLICATE',
@@ -292,16 +308,20 @@ class ObjectReplicator(Daemon):
                                                'ip': node['replication_ip']})
                             continue
                         remote_hash = pickle.loads(resp.read())
+                        self.logger.timing_since('update.remote_hash',
+                                                 remote_hash_start)
                         del resp
                     suffixes = [suffix for suffix in local_hash if
                                 local_hash[suffix] !=
                                 remote_hash.get(suffix, -1)]
                     if not suffixes:
                         continue
+                    rehashed_start = time.time()
                     hashed, recalc_hash = tpool_reraise(
                         get_hashes,
                         job['path'], recalculate=suffixes,
                         reclaim_age=self.reclaim_age)
+                    self.logger.timing_since('update.rehashes', rehashed_start)
                     self.logger.update_stats('suffix.hashes', hashed)
                     local_hash = recalc_hash
                     suffixes = [suffix for suffix in local_hash if
@@ -309,12 +329,14 @@ class ObjectReplicator(Daemon):
                                 remote_hash.get(suffix, -1)]
                     self.sync(node, job, suffixes)
                     with Timeout(self.http_timeout):
+                        fs_start = time.time()
                         conn = http_connect(
                             node['replication_ip'], node['replication_port'],
                             node['device'], job['partition'], 'REPLICATE',
                             '/' + '-'.join(suffixes),
                             headers=self.headers)
                         conn.getresponse().read()
+                    self.logger.timing_since('update.suffix.final', fs_start)
                     self.suffix_sync += len(suffixes)
                     self.logger.update_stats('suffix.syncs', len(suffixes))
                 except (Exception, Timeout):
@@ -368,8 +390,10 @@ class ObjectReplicator(Daemon):
         """Utility function that kills all coroutines currently running."""
         for coro in list(self.run_pool.coroutines_running):
             try:
+                self.logger.increment('corokill.fired')
                 coro.kill(GreenletExit)
             except GreenletExit:
+                self.logger.increment('corokill.greenletexit')
                 pass
 
     def heartbeat(self):
@@ -401,6 +425,7 @@ class ObjectReplicator(Daemon):
         """
         jobs = []
         ips = whataremyips()
+        begin = time.time()
         for local_dev in [dev for dev in self.object_ring.devs
                           if dev and dev['replication_ip'] in ips and
                           dev['replication_port'] == self.port]:
@@ -444,6 +469,7 @@ class ObjectReplicator(Daemon):
             # Move the handoff parts to the front of the list
             jobs.sort(key=lambda job: not job['delete'])
         self.job_count = len(jobs)
+        self.logger.timing_since('collect_jobs', begin)
         return jobs
 
     def replicate(self, override_devices=None, override_partitions=None):

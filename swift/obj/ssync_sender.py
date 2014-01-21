@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import urllib
+from time import time
 from swift.common import bufferedhttp
 from swift.common import exceptions
 from swift.common import http
@@ -51,10 +52,12 @@ class Sender(object):
                 # exceptions.ReplicationException for common issues that will
                 # abort the replication attempt and log a simple error. All
                 # other exceptions will be logged with a full stack trace.
+                begin = time()
                 self.connect()
                 self.missing_check()
                 self.updates()
                 self.disconnect()
+                self.daemon.logger.timing_since('ssync.total_runtime', begin)
                 return self.failures == 0
             except (exceptions.MessageTimeout,
                     exceptions.ReplicationException) as err:
@@ -62,6 +65,7 @@ class Sender(object):
                     '%s:%s/%s/%s %s', self.node.get('ip'),
                     self.node.get('port'), self.node.get('device'),
                     self.job.get('partition'), err)
+                self.daemon.logger.increment('ssync.error')
             except Exception:
                 # We don't want any exceptions to escape our code and possibly
                 # mess up the original replicator code that called us since it
@@ -87,21 +91,29 @@ class Sender(object):
         Establishes a connection and starts a REPLICATION request
         with the object server.
         """
+        begin = time()
         with exceptions.MessageTimeout(
                 self.daemon.conn_timeout, 'connect send'):
+            conn_start = time()
             self.connection = bufferedhttp.BufferedHTTPConnection(
                 '%s:%s' % (self.node['ip'], self.node['port']))
             self.connection.putrequest('REPLICATION', '/%s/%s' % (
                 self.node['device'], self.job['partition']))
             self.connection.putheader('Transfer-Encoding', 'chunked')
             self.connection.endheaders()
+            self.daemon.logger.timing_since('ssync.connect.open_start',
+                                            conn_start)
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'connect receive'):
+            resp_start = time()
             self.response = self.connection.getresponse()
+            self.daemon.logger.timing_since('ssync.connect.response_start',
+                                            resp_start)
             if self.response.status != http.HTTP_OK:
                 raise exceptions.ReplicationException(
                     'Expected status %s; got %s' %
                     (http.HTTP_OK, self.response.status))
+        self.daemon.logger.timing_since('ssync.connect.total', begin)
 
     def readline(self):
         """
@@ -156,6 +168,7 @@ class Sender(object):
         Full documentation of this can be found at
         :py:meth:`.Receiver.missing_check`.
         """
+        missing_start = time()
         # First, send our list.
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'missing_check start'):
@@ -171,11 +184,14 @@ class Sender(object):
                     urllib.quote(object_hash),
                     urllib.quote(timestamp))
                 self.connection.send('%x\r\n%s\r\n' % (len(msg), msg))
+            self.daemon.logger.timing_since('ssync.missing.send',
+                                            missing_start)
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'missing_check end'):
             msg = ':MISSING_CHECK: END\r\n'
             self.connection.send('%x\r\n%s\r\n' % (len(msg), msg))
         # Now, retrieve the list of what they want.
+        retrieve_start = time()
         while True:
             with exceptions.MessageTimeout(
                     self.daemon.http_timeout, 'missing_check start wait'):
@@ -200,6 +216,8 @@ class Sender(object):
                 break
             if line:
                 self.send_list.append(line)
+        self.daemon.logger.timing_since('ssync.missing.retrieve',
+                                        retrieve_start)
 
     def updates(self):
         """
@@ -209,6 +227,7 @@ class Sender(object):
         Full documentation of this can be found at
         :py:meth:`.Receiver.updates`.
         """
+        update_start = time()
         # First, send all our subrequests based on the send_list.
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'updates start'):
@@ -234,6 +253,8 @@ class Sender(object):
                 self.daemon.node_timeout, 'updates end'):
             msg = ':UPDATES: END\r\n'
             self.connection.send('%x\r\n%s\r\n' % (len(msg), msg))
+        self.daemon.logger.timing_since('ssync.updates.send', update_start)
+        response_start = time()
         # Now, read their response for any issues.
         while True:
             with exceptions.MessageTimeout(
@@ -259,6 +280,8 @@ class Sender(object):
             elif line:
                 raise exceptions.ReplicationException(
                     'Unexpected response: %r' % line[:1024])
+        self.daemon.logger.timing_since('ssync.updates.response',
+                                        response_start)
 
     def send_delete(self, url_path, timestamp):
         """
@@ -266,9 +289,11 @@ class Sender(object):
         """
         msg = ['DELETE ' + url_path, 'X-Timestamp: ' + timestamp]
         msg = '\r\n'.join(msg) + '\r\n\r\n'
+        delete_start = time()
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'send_delete'):
             self.connection.send('%x\r\n%s\r\n' % (len(msg), msg))
+        self.daemon.logger.timing_since('ssync.delete.send', delete_start)
 
     def send_put(self, url_path, df):
         """
@@ -281,22 +306,27 @@ class Sender(object):
             if key not in ('name', 'Content-Length'):
                 msg.append('%s: %s' % (key, value))
         msg = '\r\n'.join(msg) + '\r\n\r\n'
+        put_start = time()
         with exceptions.MessageTimeout(self.daemon.node_timeout, 'send_put'):
             self.connection.send('%x\r\n%s\r\n' % (len(msg), msg))
         for chunk in df.reader():
             with exceptions.MessageTimeout(
                     self.daemon.node_timeout, 'send_put chunk'):
                 self.connection.send('%x\r\n%s\r\n' % (len(chunk), chunk))
+        self.daemon.logger.timing_since('ssync.put.send', put_start)
 
     def disconnect(self):
         """
         Closes down the connection to the object server once done
         with the REPLICATION request.
         """
+        close_start = time()
         try:
             with exceptions.MessageTimeout(
                     self.daemon.node_timeout, 'disconnect'):
                 self.connection.send('0\r\n\r\n')
+
         except (Exception, exceptions.Timeout):
             pass  # We're okay with the above failing.
         self.connection.close()
+        self.daemon.logger.timing_since('ssync.close.send', close_start)
