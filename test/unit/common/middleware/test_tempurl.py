@@ -20,7 +20,7 @@ from time import time
 
 from swift.common.middleware import tempauth, tempurl
 from swift.common.swob import Request, Response, HeaderKeyDict
-from swift.common.utils import split_path
+from swift.common import utils
 
 
 class FakeApp(object):
@@ -59,7 +59,7 @@ class TestTempURL(unittest.TestCase):
         if environ is None:
             environ = {}
 
-        _junk, account, _junk, _junk = split_path(path, 2, 4)
+        _junk, account, _junk, _junk = utils.split_path(path, 2, 4)
         self._fake_cache_environ(environ, account, keys)
         req = Request.blank(path, environ=environ, **kwargs)
         return req
@@ -145,6 +145,21 @@ class TestTempURL(unittest.TestCase):
                           'attachment; filename="bob \\\"killer\\\".txt"')
         self.assertEquals(req.environ['swift.authorize_override'], True)
         self.assertEquals(req.environ['REMOTE_USER'], '.wsgi.tempurl')
+
+    def test_head_valid(self):
+        method = 'HEAD'
+        expires = int(time() + 86400)
+        path = '/v1/a/c/o'
+        key = 'abc'
+        hmac_body = '%s\n%s\n%s' % (method, expires, path)
+        sig = hmac.new(key, hmac_body, sha1).hexdigest()
+        req = self._make_request(path, keys=[key], environ={
+            'REQUEST_METHOD': 'HEAD',
+            'QUERY_STRING': 'temp_url_sig=%s&temp_url_expires=%s'
+            % (sig, expires)})
+        self.tempurl.app = FakeApp(iter([('200 Ok', (), '123')]))
+        resp = req.get_response(self.tempurl)
+        self.assertEquals(resp.status_int, 200)
 
     def test_get_valid_with_filename_and_inline(self):
         method = 'GET'
@@ -852,6 +867,26 @@ class TestTempURL(unittest.TestCase):
         results = tempurl.get_tempurl_keys_from_metadata(meta)
         for str_value in results:
             self.assertTrue(isinstance(str_value, str))
+
+
+class TestSwiftInfo(unittest.TestCase):
+    def setUp(self):
+        utils._swift_info = {}
+        utils._swift_admin_info = {}
+
+    def test_registered_defaults(self):
+        tempurl.filter_factory({})
+        swift_info = utils.get_swift_info()
+        self.assertTrue('tempurl' in swift_info)
+        self.assertEqual(set(swift_info['tempurl']['methods']),
+                         set(('GET', 'HEAD', 'PUT')))
+
+    def test_non_default_methods(self):
+        tempurl.filter_factory({'methods': 'GET HEAD PUT POST DELETE'})
+        swift_info = utils.get_swift_info()
+        self.assertTrue('tempurl' in swift_info)
+        self.assertEqual(set(swift_info['tempurl']['methods']),
+                         set(('GET', 'HEAD', 'PUT', 'POST', 'DELETE')))
 
 
 if __name__ == '__main__':

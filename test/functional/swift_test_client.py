@@ -40,7 +40,7 @@ class RequestError(Exception):
 
 
 class ResponseError(Exception):
-    def __init__(self, response, method, path):
+    def __init__(self, response, method=None, path=None):
         self.status = response.status
         self.reason = response.reason
         self.method = method
@@ -65,7 +65,7 @@ class ResponseError(Exception):
 
 
 def listing_empty(method):
-    for i in xrange(0, 6):
+    for i in xrange(6):
         if len(method()) == 0:
             return True
 
@@ -208,7 +208,11 @@ class Connection(object):
 
     def make_request(self, method, path=[], data='', hdrs={}, parms={},
                      cfg={}):
-        path = self.make_path(path, cfg=cfg)
+        if not cfg.get('verbatim_path'):
+            # Set verbatim_path=True to make a request to exactly the given
+            # path, not storage path + given path. Useful for
+            # non-account/container/object requests.
+            path = self.make_path(path, cfg=cfg)
         headers = self.make_headers(hdrs, cfg=cfg)
         if isinstance(parms, dict) and parms:
             quote = urllib.quote
@@ -306,10 +310,11 @@ class Base:
     def __str__(self):
         return self.name
 
-    def header_fields(self, fields):
+    def header_fields(self, required_fields, optional_fields=()):
         headers = dict(self.conn.response.getheaders())
         ret = {}
-        for field in fields:
+
+        for field in required_fields:
             if field[1] not in headers:
                 raise ValueError("%s was not found in response header" %
                                  (field[1]))
@@ -318,6 +323,15 @@ class Base:
                 ret[field[0]] = int(headers[field[1]])
             except ValueError:
                 ret[field[0]] = headers[field[1]]
+
+        for field in optional_fields:
+            if field[1] not in headers:
+                continue
+            try:
+                ret[field[0]] = int(headers[field[1]])
+            except ValueError:
+                ret[field[0]] = headers[field[1]]
+
         return ret
 
 
@@ -476,10 +490,11 @@ class Container(Base):
                                parms=parms, cfg=cfg)
 
         if self.conn.response.status == 204:
-            fields = [['bytes_used', 'x-container-bytes-used'],
-                      ['object_count', 'x-container-object-count']]
+            required_fields = [['bytes_used', 'x-container-bytes-used'],
+                               ['object_count', 'x-container-object-count']]
+            optional_fields = [['versions', 'x-versions-location']]
 
-            return self.header_fields(fields)
+            return self.header_fields(required_fields, optional_fields)
 
         raise ResponseError(self.conn.response, 'HEAD',
                             self.conn.make_path(self.path))
@@ -719,7 +734,8 @@ class File(Base):
         else:
             raise RuntimeError
 
-    def write(self, data='', hdrs={}, parms={}, callback=None, cfg={}):
+    def write(self, data='', hdrs={}, parms={}, callback=None, cfg={},
+              return_resp=False):
         block_size = 2 ** 20
 
         if isinstance(data, file):
@@ -763,6 +779,9 @@ class File(Base):
             pass
         self.md5 = self.compute_md5sum(data)
 
+        if return_resp:
+            return self.conn.response
+
         return True
 
     def write_random(self, size=None, hdrs={}, parms={}, cfg={}):
@@ -772,3 +791,12 @@ class File(Base):
                                 self.conn.make_path(self.path))
         self.md5 = self.compute_md5sum(StringIO.StringIO(data))
         return data
+
+    def write_random_return_resp(self, size=None, hdrs={}, parms={}, cfg={}):
+        data = self.random_data(size)
+        resp = self.write(data, hdrs=hdrs, parms=parms, cfg=cfg,
+                          return_resp=True)
+        if not resp:
+            raise ResponseError(self.conn.response)
+        self.md5 = self.compute_md5sum(StringIO.StringIO(data))
+        return resp
