@@ -53,8 +53,6 @@ setup(
         'bin/swift-account-reaper',
         'bin/swift-account-replicator',
         'bin/swift-account-server',
-        'bin/swift-bench',
-        'bin/swift-bench-client',
         'bin/swift-config',
         'bin/swift-container-auditor',
         'bin/swift-container-replicator',
@@ -112,6 +110,10 @@ setup(
             'filter_factory',
             'slo=swift.common.middleware.slo:filter_factory',
             'list_endpoints=swift.common.middleware.list_endpoints:'
+            'filter_factory',
+            'gatekeeper=swift.common.middleware.gatekeeper:'
+            'filter_factory',
+            'container_sync=swift.common.middleware.container_sync:'
             'filter_factory',
         ],
     },

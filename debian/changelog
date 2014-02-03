@@ -1,3 +1,100 @@
+swift (1.11.0.54.g6164fa2~rax1) lucid; urgency=low
+
+   * 15c04f6 Attempt to fix periodic memcache timeout test
+   * b89ac55 Add a way to ratelimit all writes to an account
+   * c0bf01a Config option to lower the timeout for recoverable object GETs.
+   * 7870401 Add flag to stop swob from always using absolute location.
+   * 89deaf5 Add flag to stop swob from always using absolute location.
+   * bb8ffe1 Move test.unit.locale out of gettext's way
+   * 63f8c22 Add documentation for GateKeeper
+   * c656e18 Add secondary groups to user during privilege escalation
+   * d6f0582 Add debug logger on per-test proxy-server
+   * 69d331d Container Sync: Simple HTTP Proxy load balancing
+   * b45e9a9 Skip delete_at_update for replication requests
+   * 866c568 Make swift-recon usable on hosts without IPv6
+   * 4b1fc88 Fix up SAIO to use new gatekeeper
+   * ca87827 Use a tempfile.mkdtemp() based temporary directory
+   * 892c226 lower the default yield frequency for bulk requests
+   * a8ba751 Make sure SLO's bulk-delete logger is configured
+   * f782acf release notes and authors update for 1.12
+   * a7e0a9d Fix swift-dispersion-report when partitions overlap
+   * 04b1af2 Drop origin from get_info calls
+   * 865243c Fix Error 400 Header Line Too Long
+   * 9f11819 Remove dependencies on pep8, pyflakes and flake8
+   * 13c8976 Use constant-time string compare for /info requests
+   * b6da408 Remove an useless dependency to swiftclient
+   * 7546339 Use constant time comparison in tempURL
+   * 39b8228 ismount should not raise exceptions
+   * 4fb0a20 Mute hash_cleanup_listdir common failures
+   * 1bae7ee Make test_close_error run much faster
+   * 928f5c1 Expose some SLO constraints via /info
+   * a3f2400 Consolidating and standardizing x-delete-at format
+   * 3bc49f4 Add missing setting to SLO sample conf
+   * 1901719 Move all SLO functionality to middleware
+   * af91eea use specific hacking rules
+   * bad52f1 Allow programmatic reloading of Swift hash path config
+   * f60d056 New container sync configuration option
+   * 7b9c283 Add missing license header to test file
+   * 324ddd6 Adjust unit tests to clarify existing device usage
+   * 47fcc5f Update account quota doc
+   * 6426f76 Raise diskfile.py module coverage to > 98%
+   * 5196eae Warn if read_affinity is configured but not enabled
+   * 3b166e6 Log when quarantining an object
+   * c3d9a66 Mute hash_suffix rmdir failures
+   * a3f095b Add Swift-account-stats as a related project.
+   * 65a03e5 Move the tests from functionalnosetests
+   * a708295 Remove trailing slash for consistency
+   * 6164fa2 Generic means for persisting system metadata.
+   * bc0807b Refactor to share on-disk layout with hash cleanup
+   * 157482b Whitelist external netifaces requirement
+   * f9d1497 Don't report async pendings on exception
+   * d1dd143 Up nproc limit on startup.
+   * 62254e4 Fix checkmount  error parsing in swift-recon
+   * 150f338 Remove swiftclient dep on direct_client
+   * ad88141 Allow specify arguments to .probetests script
+   * 72ade27 test 3 date format in functional tests
+   * aae254d Make POST for bulk delete actually work
+   * 34fa05f Various optimizations to RingBuilder.rebalance()
+   * a720b4d Some functional tests for object versioning
+   * d69e013 change the last-modified header value with valid one
+   * 5f4790a Allow running just one test with tox
+   * ace2aa3 Fix obj versioning w/non-ASCII container name
+   * 16204c7 Preserve tracebacks from run_in_thread
+   * 89224ae Add swiftbrowser as an associated project
+   * a49fd3d Force catch_errors into pipeline
+   * 883eb48 update ssync tests to use req.get_response()
+   * 70fc7df Just trying to keep /tmp clean
+   * 1bb6563 Handle non-integer values for if-delete-at
+   * 28bee71 Update swift-config paste appconfig inspection
+   * 03513a0 Only retry GETs for objects.
+   * 226e465 Expose basic constraints in /info
+   * 979033a Expose allowed tempurl methods in /info
+   * 06b729f Add some tests to demonstrate hash_cleanup_listdir
+   * d26e8b2 Bring obj server unit tests to > 98%
+   * 9eb4246 Updates tox.ini to use new features
+   * ddd8c73 Sync global requirements to pin sphinx to sphinx>=1.1.2,<1.2
+   * 4e7482f Use /info to check if SLO is enabled
+   * bdc296a Remove start index 0 in range()
+   * 9a2bd79 Sync global requirements to pin sphinx to sphinx>=1.1.2,<1.2
+   * 96c9ff5 Adds a retry mechanism when deleting containers
+   * ba5fe5f Use files in the source tree instead of cut/paste
+   * 038878b clarify the current state of the DiskFile API
+   * 0b57158 make test tooling less opinionated
+   * 3530708 Stop mutating PATH_INFO in proxy server
+   * dd7122c Release notes for Swift 1.11.0
+   * 34c2a45 Make ssync_receiver drop conn on exc
+   * d18b6d8 Fix HEAD tempurls
+   * 60bf2dc Override spelling of tempauth test name
+   * b332e3e Fixed a failing test on my saio
+   * 1ccb5c6 Allow access to the in-memory object server
+   * 4873fcf Opt out of the service catalog
+   * 2db9453 Preserve closeability of app iterables
+   * fdc775d Increases the UT coverage of db_replicator.py
+   * 68db481 Update handoff algorithm to use IP/port pairs
+   * 63d9138 Remove swift-bench
+   * 31b311a Return an exit code for configuration errors
+   * 9ce54d5 Prevent early auth deny in tempauth when using swift3 middleware.
+
 swift (1.10.0.170.g30c0c08~rax1) lucid; urgency=low
 
    * 74b51c9 fix expired object deletion
