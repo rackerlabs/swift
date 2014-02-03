@@ -95,6 +95,8 @@ swift (1.11.0.54.g6164fa2~rax1) lucid; urgency=low
    * 31b311a Return an exit code for configuration errors
    * 9ce54d5 Prevent early auth deny in tempauth when using swift3 middleware.
 
+ -- David Goetz <david.goetz@rackspace.com>  Mon,  3 Feb 2014 20:02:53 +0000
+
 swift (1.10.0.170.g30c0c08~rax1) lucid; urgency=low
 
    * 74b51c9 fix expired object deletion
