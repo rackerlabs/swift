@@ -1,3 +1,9 @@
+swift (1.11.0.54.g6164fa2~rax2) lucid; urgency=low
+
+   * remove swift-bench from debian okg
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon,  4 Feb 2014 20:02:53 +0000
+
 swift (1.11.0.54.g6164fa2~rax1) lucid; urgency=low
 
    * 15c04f6 Attempt to fix periodic memcache timeout test
