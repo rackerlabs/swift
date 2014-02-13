@@ -1,3 +1,25 @@
+swift (1.11.0.54.g6164fa2~rax3) lucid; urgency=low
+
+   * b174216 Remove duplicate doc entry for swob
+   * 5fca0d0 Ensure swift.source is set for DLO/SLO requests
+   * 8b4876f Fix recon docs
+   * 4a970ab Fix a comment in SLO middleware
+   * 0f17c18 Fix a comment in bulk middleware.
+   * aad8152 Make .expiring_objects account name configurable
+   * 1f3ae6d Remove swiftclient dependency
+   * 6241ab2 Fix a couple ifs in account quota middleware.
+   * 24657b2 Add tests for swift-ring-builder
+   * de8f798 remove bench from debian
+   * 5cb7ac1 Fix numbering of steps in proxy section of install_multinode
+   * 6acea29 Move all DLO functionality to middleware
+   * ec91d6d add author
+   * 6608bf1 upping version to 1.11
+   * b881a18 Fix up double mocking of swob.Request.__init__
+   * 0d71014 Reduce line count by two
+   * 2042402 Attempt to make test_memcache_pool_timeout stable
+
+ -- David Goetz <david.goetz@rackspace.com>  Thu,  13 Feb 2014 20:02:53 +0000
+
 swift (1.11.0.54.g6164fa2~rax2) lucid; urgency=low
 
    * remove swift-bench from debian okg
