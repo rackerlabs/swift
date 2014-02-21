@@ -1,14 +1,20 @@
+swift (1.11.0.54.g6164fa2~rax6) lucid; urgency=low
+
+   * Trying to remove dnspython as a requirement.
+
+ -- Gregory Holt <gholt@rackspace.com>  Thu, 13 Feb 2014 21:48:27 +0000
+
 swift (1.11.0.54.g6164fa2~rax5) lucid; urgency=low
 
    * adding in https://review.openstack.org/#/c/73037/
 
- -- David Goetz <david.goetz@rackspace.com>  Thu,  13 Feb 2014 21:04:53 +0000
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 13 Feb 2014 21:04:53 +0000
 
 swift (1.11.0.54.g6164fa2~rax4) lucid; urgency=low
 
    * adding dlo into setup.py
 
- -- David Goetz <david.goetz@rackspace.com>  Thu,  13 Feb 2014 21:02:53 +0000
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 13 Feb 2014 21:02:53 +0000
 
 swift (1.11.0.54.g6164fa2~rax3) lucid; urgency=low
 
@@ -30,7 +36,7 @@ swift (1.11.0.54.g6164fa2~rax3) lucid; urgency=low
    * 0d71014 Reduce line count by two
    * 2042402 Attempt to make test_memcache_pool_timeout stable
 
- -- David Goetz <david.goetz@rackspace.com>  Thu,  13 Feb 2014 20:02:53 +0000
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 13 Feb 2014 20:02:53 +0000
 
 swift (1.11.0.54.g6164fa2~rax2) lucid; urgency=low
 
