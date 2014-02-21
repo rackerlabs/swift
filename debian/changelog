@@ -1,3 +1,23 @@
+swift (1.11.0.54.g6164fa2~rax7) lucid; urgency=low
+
+   * 1f67eb7 Support If-[None-]Match for object HEAD, SLO, and DLO
+   * a94be94 Fix misspellings in swift
+   * 2e220ca Improve StaticWeb 404 on web-listings/index
+   * b24a7dd Allow log disable in account/container server
+   * 4790270 Trying to remove dnspython as a requirement
+   * 5f50391 small typo in cli/recon.py
+   * c500836 upping vrs
+   * 54cb3d0 adding in https://review.openstack.org/#/c/73037/
+   * 0023ba9 dlo into setup.py
+   * feb0a2a adding in dlo to setup.py
+   * 45c3894 upping vrs to 1.11.53...rax3
+   * 39d22cc Don't create bin/* files magically
+   * a519579 Small efficiency improvement for SLO range GET
+   * ab98fe3 Added docs about the swift_source log field
+   * b174216 Remove duplicate doc entry for swob
+
+ -- David Goetz <david.goetz@rackspace.com>  Fri, 21 Feb 2014 21:04:53 +0000
+
 swift (1.11.0.54.g6164fa2~rax6) lucid; urgency=low
 
    * Trying to remove dnspython as a requirement.
