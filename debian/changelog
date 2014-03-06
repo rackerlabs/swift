@@ -1,3 +1,9 @@
+swift (1.11.0.54.g6164fa2~rax8) lucid; urgency=low
+
+   * 3268c2a maintain auth in make_env if it is set up
+
+-- David Goetz <david.goetz@rackspace.com>  Thu, 6 Mar 2014 21:04:53 +0000
+
 swift (1.11.0.54.g6164fa2~rax7) lucid; urgency=low
 
    * 1f67eb7 Support If-[None-]Match for object HEAD, SLO, and DLO
