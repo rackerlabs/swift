@@ -1,3 +1,9 @@
+swift (1.12.0.83.g4ee301f~rax2) lucid; urgency=low
+
+   * Added container sync's init.d script to the packaging.
+
+ -- Gregory Holt <gholt@rackspace.com>  Mon, 17 Mar 2014 21:04:54 +0000
+
 swift (1.12.0.83.g4ee301f~rax1) lucid; urgency=low
 
    * 0efac0c make probetests work with conf.d configs
