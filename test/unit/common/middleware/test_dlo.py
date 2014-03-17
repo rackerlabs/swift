@@ -682,6 +682,95 @@ class TestDloGetManifest(DloTestCase):
         self.assertEqual(body, 'aaaaabbbbbccccc')
         self.assertTrue(isinstance(exc, exceptions.SegmentError))
 
+    def test_get_oversize_segment(self):
+        # If we send a Content-Length header to the client, it's based on the
+        # container listing. If a segment gets bigger by the time we get to it
+        # (like if a client uploads a bigger segment w/the same name), we need
+        # to not send anything beyond the length we promised. Also, we should
+        # probably raise an exception.
+
+        # This is now longer than the original seg_03+seg_04+seg_05 combined
+        self.app.register(
+            'GET', '/v1/AUTH_test/c/seg_03',
+            swob.HTTPOk, {'Content-Length': '20', 'Etag': 'seg03-etag'},
+            'cccccccccccccccccccc')
+
+        req = swob.Request.blank(
+            '/v1/AUTH_test/mancon/manifest',
+            environ={'REQUEST_METHOD': 'GET'})
+        status, headers, body, exc = self.call_dlo(req, expect_exception=True)
+        headers = swob.HeaderKeyDict(headers)
+
+        self.assertEqual(status, '200 OK')  # sanity check
+        self.assertEqual(headers.get('Content-Length'), '25')  # sanity check
+        self.assertEqual(body, 'aaaaabbbbbccccccccccccccc')
+        self.assertTrue(isinstance(exc, exceptions.SegmentError))
+        self.assertEqual(
+            self.app.calls,
+            [('GET', '/v1/AUTH_test/mancon/manifest'),
+             ('GET', '/v1/AUTH_test/c?format=json&prefix=seg'),
+             ('GET', '/v1/AUTH_test/c/seg_01'),
+             ('GET', '/v1/AUTH_test/c/seg_02'),
+             ('GET', '/v1/AUTH_test/c/seg_03')])
+
+    def test_get_undersize_segment(self):
+        # If we send a Content-Length header to the client, it's based on the
+        # container listing. If a segment gets smaller by the time we get to
+        # it (like if a client uploads a smaller segment w/the same name), we
+        # need to raise an exception so that the connection will be closed by
+        # the WSGI server. Otherwise, the WSGI server will be waiting for the
+        # next request, the client will still be waiting for the rest of the
+        # response, and nobody will be happy.
+
+        # Shrink it by a single byte
+        self.app.register(
+            'GET', '/v1/AUTH_test/c/seg_03',
+            swob.HTTPOk, {'Content-Length': '4', 'Etag': 'seg03-etag'},
+            'cccc')
+
+        req = swob.Request.blank(
+            '/v1/AUTH_test/mancon/manifest',
+            environ={'REQUEST_METHOD': 'GET'})
+        status, headers, body, exc = self.call_dlo(req, expect_exception=True)
+        headers = swob.HeaderKeyDict(headers)
+
+        self.assertEqual(status, '200 OK')  # sanity check
+        self.assertEqual(headers.get('Content-Length'), '25')  # sanity check
+        self.assertEqual(body, 'aaaaabbbbbccccdddddeeeee')
+        self.assertTrue(isinstance(exc, exceptions.SegmentError))
+
+    def test_get_undersize_segment_range(self):
+        # Shrink it by a single byte
+        self.app.register(
+            'GET', '/v1/AUTH_test/c/seg_03',
+            swob.HTTPOk, {'Content-Length': '4', 'Etag': 'seg03-etag'},
+            'cccc')
+
+        req = swob.Request.blank(
+            '/v1/AUTH_test/mancon/manifest',
+            environ={'REQUEST_METHOD': 'GET'},
+            headers={'Range': 'bytes=0-14'})
+        status, headers, body, exc = self.call_dlo(req, expect_exception=True)
+        headers = swob.HeaderKeyDict(headers)
+
+        self.assertEqual(status, '206 Partial Content')  # sanity check
+        self.assertEqual(headers.get('Content-Length'), '15')  # sanity check
+        self.assertEqual(body, 'aaaaabbbbbcccc')
+        self.assertTrue(isinstance(exc, exceptions.SegmentError))
+
+    def test_get_with_auth_overridden(self):
+        auth_got_called = [0]
+
+        def my_auth():
+            auth_got_called[0] += 1
+            return None
+
+        req = swob.Request.blank('/v1/AUTH_test/mancon/manifest',
+                                 environ={'REQUEST_METHOD': 'GET',
+                                          'swift.authorize': my_auth})
+        status, headers, body = self.call_dlo(req)
+        self.assertTrue(auth_got_called[0] > 1)
+
 
 def fake_start_response(*args, **kwargs):
     pass
@@ -720,7 +809,7 @@ class TestDloCopyHook(DloTestCase):
 
         # slip this guy in there to pull out the hook
         def extract_copy_hook(env, sr):
-            copy_hook[0] = env.get('swift.copy_response_hook')
+            copy_hook[0] = env.get('swift.copy_hook')
             return self.app(env, sr)
 
         self.dlo = dlo.filter_factory({})(extract_copy_hook)
@@ -733,23 +822,55 @@ class TestDloCopyHook(DloTestCase):
         self.assertTrue(self.copy_hook is not None)  # sanity check
 
     def test_copy_hook_passthrough(self):
-        req = swob.Request.blank('/v1/AUTH_test/c/man')
-        # no X-Object-Manifest header, so do nothing
-        resp = swob.Response(request=req, status=200)
+        source_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'GET'})
+        sink_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'PUT'})
+        source_resp = swob.Response(request=source_req, status=200)
 
-        modified_resp = self.copy_hook(req, resp)
-        self.assertTrue(modified_resp is resp)
+        # no X-Object-Manifest header, so do nothing
+        modified_resp = self.copy_hook(source_req, source_resp, sink_req)
+        self.assertTrue(modified_resp is source_resp)
 
     def test_copy_hook_manifest(self):
-        req = swob.Request.blank('/v1/AUTH_test/c/man')
-        resp = swob.Response(request=req, status=200,
-                             headers={"X-Object-Manifest": "c/o"},
-                             app_iter=["manifest"])
+        source_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'GET'})
+        sink_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'PUT'})
+        source_resp = swob.Response(
+            request=source_req, status=200,
+            headers={"X-Object-Manifest": "c/o"},
+            app_iter=["manifest"])
 
-        modified_resp = self.copy_hook(req, resp)
-        self.assertTrue(modified_resp is not resp)
+        # it's a manifest, so copy the segments to make a normal object
+        modified_resp = self.copy_hook(source_req, source_resp, sink_req)
+        self.assertTrue(modified_resp is not source_resp)
         self.assertEqual(modified_resp.etag,
                          hashlib.md5("o1-etago2-etag").hexdigest())
+        self.assertEqual(sink_req.headers.get('X-Object-Manifest'), None)
+
+    def test_copy_hook_manifest_with_multipart_manifest_get(self):
+        source_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'GET',
+                     'QUERY_STRING': 'multipart-manifest=get'})
+        sink_req = swob.Request.blank(
+            '/v1/AUTH_test/c/man',
+            environ={'REQUEST_METHOD': 'PUT'})
+        source_resp = swob.Response(
+            request=source_req, status=200,
+            headers={"X-Object-Manifest": "c/o"},
+            app_iter=["manifest"])
+
+        # make sure the sink request (the backend PUT) gets X-Object-Manifest
+        # on it, but that's all
+        modified_resp = self.copy_hook(source_req, source_resp, sink_req)
+        self.assertTrue(modified_resp is source_resp)
+        self.assertEqual(sink_req.headers.get('X-Object-Manifest'), 'c/o')
 
 
 class TestDloConfiguration(unittest.TestCase):

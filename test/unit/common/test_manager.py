@@ -30,7 +30,7 @@ from swift.common import manager
 DUMMY_SIG = 1
 
 
-class MockOs():
+class MockOs(object):
     RAISE_EPERM_SIG = 99
 
     def __init__(self, pids):
@@ -77,7 +77,7 @@ class TestManagerModule(unittest.TestCase):
                           len(manager.REST_SERVERS))
 
     def test_setup_env(self):
-        class MockResource():
+        class MockResource(object):
             def __init__(self, error=None):
                 self.error = error
                 self.called_with_args = []
@@ -144,7 +144,7 @@ class TestManagerModule(unittest.TestCase):
         self.assert_(myfunc.publicly_accessible)
 
     def test_watch_server_pids(self):
-        class MockOs():
+        class MockOs(object):
             WNOHANG = os.WNOHANG
 
             def __init__(self, pid_map={}):
@@ -164,7 +164,7 @@ class TestManagerModule(unittest.TestCase):
                 else:
                     return rv
 
-        class MockTime():
+        class MockTime(object):
             def __init__(self, ticks=None):
                 self.tock = time()
                 if not ticks:
@@ -182,7 +182,7 @@ class TestManagerModule(unittest.TestCase):
             def sleep(*args):
                 return
 
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, pids, run_dir=manager.RUN_DIR, zombie=0):
                 self.heartbeat = (pids for _ in range(zombie))
@@ -843,7 +843,7 @@ class TestServer(unittest.TestCase):
     def test_spawn(self):
 
         # mocks
-        class MockProcess():
+        class MockProcess(object):
 
             NOTHING = 'default besides None'
             STDOUT = 'stdout'
@@ -857,7 +857,7 @@ class TestServer(unittest.TestCase):
             def Popen(self, args, **kwargs):
                 return MockProc(self.pids.next(), args, **kwargs)
 
-        class MockProc():
+        class MockProc(object):
 
             def __init__(self, pid, args, stdout=MockProcess.NOTHING,
                          stderr=MockProcess.NOTHING):
@@ -1014,7 +1014,7 @@ class TestServer(unittest.TestCase):
                 print >>self._stdout, 'mock process finished'
                 self.finished = True
 
-        class MockTime():
+        class MockTime(object):
 
             def time(self):
                 return time()
@@ -1073,7 +1073,7 @@ class TestServer(unittest.TestCase):
                 manager.time = old_time
 
     def test_interact(self):
-        class MockProcess():
+        class MockProcess(object):
 
             def __init__(self, fail=False):
                 self.returncode = None
@@ -1113,7 +1113,7 @@ class TestServer(unittest.TestCase):
         )
 
         #mocks
-        class MockSpawn():
+        class MockSpawn(object):
 
             def __init__(self, pids=None):
                 self.conf_files = []
@@ -1331,8 +1331,14 @@ class TestManager(unittest.TestCase):
         for s in m.servers:
             self.assert_(str(s) in replicators)
 
+    def test_iter(self):
+        m = manager.Manager(['all'])
+        self.assertEquals(len(list(m)), len(manager.ALL_SERVERS))
+        for server in m:
+            self.assert_(server.server in manager.ALL_SERVERS)
+
     def test_status(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1368,7 +1374,7 @@ class TestManager(unittest.TestCase):
         def mock_setup_env():
             getattr(mock_setup_env, 'called', []).append(True)
 
-        class MockServer():
+        class MockServer(object):
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
                 self.called = defaultdict(list)
@@ -1430,7 +1436,7 @@ class TestManager(unittest.TestCase):
             manager.Server = old_swift_server
 
     def test_no_wait(self):
-        class MockServer():
+        class MockServer(object):
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
                 self.called = defaultdict(list)
@@ -1480,7 +1486,7 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_no_daemon(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1515,7 +1521,7 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_once(self):
-        class MockServer():
+        class MockServer(object):
 
             def __init__(self, server, run_dir=manager.RUN_DIR):
                 self.server = server
@@ -1552,13 +1558,16 @@ class TestManager(unittest.TestCase):
             manager.Server = orig_swift_server
 
     def test_stop(self):
-        class MockServerFactory():
-            class MockServer():
+        class MockServerFactory(object):
+            class MockServer(object):
                 def __init__(self, pids, run_dir=manager.RUN_DIR):
                     self.pids = pids
 
                 def stop(self, **kwargs):
                     return self.pids
+
+                def status(self, **kwargs):
+                    return not self.pids
 
             def __init__(self, server_pids, run_dir=manager.RUN_DIR):
                 self.server_pids = server_pids
@@ -1593,6 +1602,14 @@ class TestManager(unittest.TestCase):
             m = manager.Manager(['test'])
             status = m.stop()
             self.assertEquals(status, 1)
+            # test kill not running
+            server_pids = {
+                'test': []
+            }
+            manager.Server = MockServerFactory(server_pids)
+            m = manager.Manager(['test'])
+            status = m.kill()
+            self.assertEquals(status, 0)
             # test won't die
             server_pids = {
                 'test': [None]
@@ -1641,7 +1658,7 @@ class TestManager(unittest.TestCase):
         self.assertEquals(m.start_was_called, True)
 
     def test_reload(self):
-        class MockManager():
+        class MockManager(object):
             called = defaultdict(list)
 
             def __init__(self, servers):

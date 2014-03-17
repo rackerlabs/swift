@@ -58,7 +58,7 @@ from swift.common.swob import Response
 from test.unit import FakeLogger
 
 
-class MockOs():
+class MockOs(object):
 
     def __init__(self, pass_funcs=[], called_funcs=[], raise_funcs=[]):
         self.closed_fds = []
@@ -99,7 +99,7 @@ class MockOs():
             return getattr(os, name)
 
 
-class MockUdpSocket():
+class MockUdpSocket(object):
     def __init__(self):
         self.sent = []
 
@@ -110,7 +110,7 @@ class MockUdpSocket():
         pass
 
 
-class MockSys():
+class MockSys(object):
 
     def __init__(self):
         self.stdin = TemporaryFile('w')
@@ -119,6 +119,10 @@ class MockSys():
         self.__stderr__ = self.stderr
         self.stdio_fds = [self.stdin.fileno(), self.stdout.fileno(),
                           self.stderr.fileno()]
+
+    @property
+    def version_info(self):
+        return sys.version_info
 
 
 def reset_loggers():
@@ -2663,7 +2667,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
     def test_no_fdatasync(self):
         called = []
 
-        class NoFdatasync:
+        class NoFdatasync(object):
             pass
 
         def fsync(fd):
@@ -2677,7 +2681,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
     def test_yes_fdatasync(self):
         called = []
 
-        class YesFdatasync:
+        class YesFdatasync(object):
 
             def fdatasync(self, fd):
                 called.append(fd)
@@ -2688,7 +2692,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
 
     def test_fsync_bad_fullsync(self):
 
-        class FCNTL:
+        class FCNTL(object):
 
             F_FULLSYNC = 123
 
@@ -2701,7 +2705,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
     def test_fsync_f_fullsync(self):
         called = []
 
-        class FCNTL:
+        class FCNTL(object):
 
             F_FULLSYNC = 123
 
@@ -2716,7 +2720,7 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
     def test_fsync_no_fullsync(self):
         called = []
 
-        class FCNTL:
+        class FCNTL(object):
             pass
 
         def fsync(fd):

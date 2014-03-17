@@ -136,7 +136,7 @@ class UnknownCommandError(Exception):
     pass
 
 
-class Manager():
+class Manager(object):
     """Main class for performing commands on groups of servers.
 
     :param servers: list of server names as strings
@@ -162,6 +162,9 @@ class Manager():
         self.servers = set()
         for name in server_names:
             self.servers.add(Server(name, run_dir))
+
+    def __iter__(self):
+        return iter(self.servers)
 
     @command
     def status(self, **kwargs):
@@ -251,6 +254,17 @@ class Manager():
         return 1
 
     @command
+    def kill(self, **kwargs):
+        """stop a server (no error if not running)
+        """
+        status = self.stop(**kwargs)
+        kwargs['quiet'] = True
+        if status and not self.status(**kwargs):
+            # only exit error if the server is still running
+            return status
+        return 0
+
+    @command
     def shutdown(self, **kwargs):
         """allow current requests to finish on supporting servers
         """
@@ -324,7 +338,7 @@ class Manager():
         return f(**kwargs)
 
 
-class Server():
+class Server(object):
     """Manage operations on a server or group of servers of similar type
 
     :param server: name of server
@@ -523,7 +537,7 @@ class Server():
         :param conf_file: path to conf_file to use as first arg
         :param once: boolean, add once argument to command
         :param wait: boolean, if true capture stdout with a pipe
-        :param daemon: boolean, if true ask server to log to console
+        :param daemon: boolean, if false ask server to log to console
 
         :returns : the pid of the spawned process
         """
@@ -560,6 +574,11 @@ class Server():
         for proc in self.procs:
             # wait for process to close its stdout
             output = proc.stdout.read()
+            if kwargs.get('once', False):
+                # if you don't want once to wait you can send it to the
+                # background on the command line, I generally just run with
+                # no-daemon anyway, but this is quieter
+                proc.wait()
             if output:
                 print output
                 start = time.time()
