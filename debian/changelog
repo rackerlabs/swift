@@ -1,3 +1,40 @@
+swift (1.12.0.83.g4ee301f~rax1) lucid; urgency=low
+
+   * 0efac0c make probetests work with conf.d configs
+   * 7463a46 DRY out common.constraints a bit more
+   * 2abb829 Make cors work better.
+   * e7fb089 Fix ring-builder crash
+   * d9d5790 Functional tests for TempURL and SLO together
+   * 165dd44 Add tempurl to the example proxy config's pipeline
+   * 8d1278c copy over swift.authorize stuff into subrequests
+   * 18520a9 Fixed mispelling in function name - accross to across
+   * 28c0da2 Functional tests for tempurl
+   * fc499f3 Added a test for empty metadata
+   * a2c503b Add missing swift constraint for functional tests
+   * fa4d105 Fix ineffective expect header test
+   * 59ad30c Make internal client work with conf.d
+   * 2ed5a4a Speed up failing InternalClient requests
+   * 20466d8 sanity check copy tests
+   * 09ef06f Convert all old-style classes to new-style
+   * b9434b5 Merge "Object server PUTs should respect client_timeout"
+   * ccaa83c Use new style class for ringbuilder's Commands
+   * e70a9e9 fix gatekeeper response headers behavior
+   * 3f19041 Don't lard up InternalClient with extra middleware
+   * e82d40d Object server PUTs should respect client_timeout
+   * 4f24ef8 Make DLO manifest copying work with ?multipart-manifest=get
+   * 3860e55 Fix a couple typos
+   * dc5c5fb Remove blank space after print
+   * b6eda4a AUTHORS and CHANGELOG update for 1.13 release
+   * 3357a58 Alphabetized items under "Middleware" in source documentation
+   * beaa2b8 tabs to spaces
+   * f42cb54 Refactor a quorum-size calculation
+   * 5dfa0bd Alphabetized items under other sections in source documentation
+   * 38e015e Functional tests for DLO If-Match/If-None-Match
+   * 4625017 Functional tests for SLO If-Match/If-None-Match
+   * 25ebf3a Raise error on long or short DLO
+
+ -- Michael Barton <michael.barton@rackspace.com>  Mon, 17 Mar 2014 21:04:53 +0000
+
 swift (1.11.0.54.g6164fa2~rax8) lucid; urgency=low
 
    * 3268c2a maintain auth in make_env if it is set up
