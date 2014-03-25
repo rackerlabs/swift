@@ -1,3 +1,10 @@
+swift (1.12.0.83.g4ee301f~rax3) lucid; urgency=low
+
+   * Adding new swift-object-2 init script for making a separate object
+     server for replication traffic only.
+
+ -- Gregory Holt <gholt@rackspace.com>  Tue, 25 Mar 2014 19:19:51 +0000
+
 swift (1.12.0.83.g4ee301f~rax2) lucid; urgency=low
 
    * Added container sync's init.d script to the packaging.
