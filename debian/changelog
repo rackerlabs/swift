@@ -1,3 +1,56 @@
+swift (1.13.1.rc1.25.g2f00ce7~rax1) lucid; urgency=low
+
+  * 58fe2f2 Add tests and comments re constraints in /info
+  * c2744ca Fix deprecation warning
+  * d47a582 update setup.py with pbr version
+  * 677ee3c Add missing constraints to /info
+  * d32dc8d Unify backend logging
+  * b67a4b9 Support for content-length in the upload object method for internal client.
+  * 9d0067a Attempt to ensure connect always timesout
+  * 0e366aa Move module level setup under setup_package method
+  * bf292ae Fixed error in container sync exc handling
+  * de020f0 Handle getting info on wrong database type
+  * eaf6815 updates for 1.13.1 release
+  * 39f5eab Clean up swift-{account, container}-info
+  * 44b3941 Read the configuration once for all func tests
+  * 5ea6c88 Only change collation for functional tests
+  * 07fcf50 Rework use of constraints to ease testing
+  * 8a09091 Only fetch a timestamp when needed
+  * a7cfcc3 Relocate DATADIR to backends
+  * f63b375 Update callback with proper bytes transferred
+  * 87710cc AssertEquals is deprecated, use assertEqual partI
+  * 0b89382 Add "If-None-Match: *" support to PUT
+  * e6c9109 Range requests not working with sub_SLOs
+  * 1e784a4 Fixes SUPER important typo in CHANGELOG.
+  * c90ede2 Added swift-account-info tool.
+  * 5bb7603 Mock out time and sleep to avoid races
+  * b8f73a1 Move like unit tests together; add comments
+  * bb7bb4e Only run flake8 on Swift code
+  * c6cebb6 Write out ring.gz's in a safer fashion
+  * 31b9945 Invert which proxy logging middleware instance logs
+  * 12c9dbe minor cleanups for swift-container-info
+  * 6559918 don't repatch mimetools again. and again. again.
+  * e40b017 Update swift3 repository
+  * 45e797b additional functional tests for account acls
+  * 4b7bab9 Update swift-get-nodes to use storage_directory util func
+  * a3c4713 Bump up sleep when expecting a timeout
+  * 0847775 fix a skipped account ACLs functional test
+  * 6145c57 Make initialization test failure more explicit
+  * a37f90b Removed hard coded location of ring
+  * 6b441fa Added swift-container-info tool.
+  * c4a2313 Block X-Backend* in gatekeeper
+  * 2e6325f Enable object versions for SAIO by default
+  * a26b705 Fix TestGreenThreadSafeIterator test
+  * 7829ca0 Remove some debugging prints from tests
+  * 6514a48 move cors-test-page to literal include
+  * 01410c6 Make backend container requests use the same X-Timestamp
+  * 2e8bc44 Fix race on container recreate
+  * a69789f Allow pre-1970 dates in If-[Un]Modified-Since
+  * cd149ae Check object segment MD5s
+
+
+ -- Michael Barton <michael.barton@rackspace.com>  Wed,  9 Apr 2014 21:35:17 +0000
+
 swift (1.12.0.83.g4ee301f~rax3) lucid; urgency=low
 
    * Adding new swift-object-2 init script for making a separate object
