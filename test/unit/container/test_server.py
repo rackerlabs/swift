@@ -22,6 +22,7 @@ from shutil import rmtree
 from StringIO import StringIO
 from tempfile import mkdtemp
 from test.unit import FakeLogger
+from time import gmtime
 from xml.dom import minidom
 
 from eventlet import spawn, Timeout, listen
@@ -30,7 +31,9 @@ import simplejson
 from swift.common.swob import Request, HeaderKeyDict
 import swift.container
 from swift.container import server as container_server
-from swift.common.utils import normalize_timestamp, mkdirs, public, replication
+from swift.common import constraints
+from swift.common.utils import (normalize_timestamp, mkdirs, public,
+                                replication, lock_parent_directory)
 from test.unit import fake_http_connect
 from swift.common.request_helpers import get_sys_meta_prefix
 
@@ -764,6 +767,91 @@ class TestContainerController(unittest.TestCase):
         resp = req.get_response(self.controller)
         self.assertEquals(resp.status_int, 404)
 
+    def test_DELETE_PUT_recreate(self):
+        path = '/sda1/p/a/c'
+        req = Request.blank(path, method='PUT',
+                            headers={'X-Timestamp': '1'})
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 201)
+        req = Request.blank(path, method='DELETE',
+                            headers={'X-Timestamp': '2'})
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 204)
+        req = Request.blank(path, method='GET')
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 404)  # sanity
+        db = self.controller._get_container_broker('sda1', 'p', 'a', 'c')
+        self.assertEqual(True, db.is_deleted())
+        info = db.get_info()
+        self.assertEquals(info['put_timestamp'], normalize_timestamp('1'))
+        self.assertEquals(info['delete_timestamp'], normalize_timestamp('2'))
+        # recreate
+        req = Request.blank(path, method='PUT',
+                            headers={'X-Timestamp': '4'})
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 201)
+        db = self.controller._get_container_broker('sda1', 'p', 'a', 'c')
+        self.assertEqual(False, db.is_deleted())
+        info = db.get_info()
+        self.assertEquals(info['put_timestamp'], normalize_timestamp('4'))
+        self.assertEquals(info['delete_timestamp'], normalize_timestamp('2'))
+
+    def test_DELETE_PUT_recreate_replication_race(self):
+        path = '/sda1/p/a/c'
+        # create a deleted db
+        req = Request.blank(path, method='PUT',
+                            headers={'X-Timestamp': '1'})
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 201)
+        db = self.controller._get_container_broker('sda1', 'p', 'a', 'c')
+        req = Request.blank(path, method='DELETE',
+                            headers={'X-Timestamp': '2'})
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 204)
+        req = Request.blank(path, method='GET')
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 404)  # sanity
+        self.assertEqual(True, db.is_deleted())
+        # now save a copy of this db (and remove it from the "current node")
+        db = self.controller._get_container_broker('sda1', 'p', 'a', 'c')
+        db_path = db.db_file
+        other_path = os.path.join(self.testdir, 'othernode.db')
+        os.rename(db_path, other_path)
+        # that should make it missing on this node
+        req = Request.blank(path, method='GET')
+        resp = req.get_response(self.controller)
+        self.assertEquals(resp.status_int, 404)  # sanity
+
+        # setup the race in os.path.exists (first time no, then yes)
+        mock_called = []
+        _real_exists = os.path.exists
+
+        def mock_exists(db_path):
+            rv = _real_exists(db_path)
+            if not mock_called:
+                # be as careful as we might hope backend replication can be...
+                with lock_parent_directory(db_path, timeout=1):
+                    os.rename(other_path, db_path)
+            mock_called.append((rv, db_path))
+            return rv
+
+        req = Request.blank(path, method='PUT',
+                            headers={'X-Timestamp': '4'})
+        with mock.patch.object(container_server.os.path, 'exists',
+                               mock_exists):
+            resp = req.get_response(self.controller)
+        # db was successfully created
+        self.assertEqual(resp.status_int // 100, 2)
+        db = self.controller._get_container_broker('sda1', 'p', 'a', 'c')
+        self.assertEqual(False, db.is_deleted())
+        # mock proves the race
+        self.assertEqual(mock_called[:2],
+                         [(exists, db.db_file) for exists in (False, True)])
+        # info was updated
+        info = db.get_info()
+        self.assertEquals(info['put_timestamp'], normalize_timestamp('4'))
+        self.assertEquals(info['delete_timestamp'], normalize_timestamp('2'))
+
     def test_DELETE_not_found(self):
         # Even if the container wasn't previously heard of, the container
         # server will accept the delete and replicate it to where it belongs
@@ -931,7 +1019,7 @@ class TestContainerController(unittest.TestCase):
     def test_GET_over_limit(self):
         req = Request.blank(
             '/sda1/p/a/c?limit=%d' %
-            (container_server.CONTAINER_LISTING_LIMIT + 1),
+            (constraints.CONTAINER_LISTING_LIMIT + 1),
             environ={'REQUEST_METHOD': 'GET'})
         resp = req.get_response(self.controller)
         self.assertEquals(resp.status_int, 412)
@@ -1868,6 +1956,22 @@ class TestContainerController(unittest.TestCase):
         resp = req.get_response(self.controller)
         self.assertEqual(resp.status_int, 404)
         self.assertFalse(self.controller.logger.log_dict['info'])
+
+    def test_log_line_format(self):
+        req = Request.blank(
+            '/sda1/p/a/c',
+            environ={'REQUEST_METHOD': 'HEAD', 'REMOTE_ADDR': '1.2.3.4'})
+        self.controller.logger = FakeLogger()
+        with mock.patch(
+                'time.gmtime', mock.MagicMock(side_effect=[gmtime(10001.0)])):
+            with mock.patch(
+                    'time.time',
+                    mock.MagicMock(side_effect=[10000.0, 10001.0, 10002.0])):
+                req.get_response(self.controller)
+        self.assertEqual(
+            self.controller.logger.log_dict['info'],
+            [(('1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD /sda1/p/a/c" '
+             '404 - "-" "-" "-" 2.0000 "-"',), {})])
 
 
 if __name__ == '__main__':

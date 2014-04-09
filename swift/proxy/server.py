@@ -204,16 +204,8 @@ class Application(object):
         self.admin_key = conf.get('admin_key', None)
         register_swift_info(
             version=swift_version,
-            max_file_size=constraints.MAX_FILE_SIZE,
-            max_meta_name_length=constraints.MAX_META_NAME_LENGTH,
-            max_meta_value_length=constraints.MAX_META_VALUE_LENGTH,
-            max_meta_count=constraints.MAX_META_COUNT,
-            account_listing_limit=constraints.ACCOUNT_LISTING_LIMIT,
-            container_listing_limit=constraints.CONTAINER_LISTING_LIMIT,
-            max_account_name_length=constraints.MAX_ACCOUNT_NAME_LENGTH,
-            max_container_name_length=constraints.MAX_CONTAINER_NAME_LENGTH,
-            max_object_name_length=constraints.MAX_OBJECT_NAME_LENGTH,
-            strict_cors_mode=self.strict_cors_mode)
+            strict_cors_mode=self.strict_cors_mode,
+            **constraints.EFFECTIVE_CONSTRAINTS)
 
     def check_config(self):
         """
@@ -264,11 +256,6 @@ class Application(object):
         try:
             if self.memcache is None:
                 self.memcache = cache_from_env(env)
-            # Remove any x-backend-* headers since those are reserved for use
-            # by backends communicating with each other; no end user should be
-            # able to send those into the cluster.
-            for key in list(k for k in env if k.startswith('HTTP_X_BACKEND_')):
-                del env[key]
             req = self.update_request(Request(env))
             return self.handle_request(req)(env, start_response)
         except UnicodeError:

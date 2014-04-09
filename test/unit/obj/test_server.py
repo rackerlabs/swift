@@ -17,6 +17,7 @@
 """Tests for swift.obj.server"""
 
 import cPickle as pickle
+import datetime
 import operator
 import os
 import mock
@@ -24,7 +25,7 @@ import unittest
 import math
 from shutil import rmtree
 from StringIO import StringIO
-from time import gmtime, strftime, time
+from time import gmtime, strftime, time, struct_time
 from tempfile import mkdtemp
 from hashlib import md5
 
@@ -483,6 +484,54 @@ class TestObjectController(unittest.TestCase):
         req.headers['Transfer-Encoding'] = 'bad'
         resp = req.get_response(self.object_controller)
         self.assertEqual(resp.status_int, 400)
+
+    def test_PUT_if_none_match_star(self):
+        # First PUT should succeed
+        timestamp = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp,
+                     'Content-Length': '6',
+                     'Content-Type': 'application/octet-stream',
+                     'If-None-Match': '*'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        # File should already exist so it should fail
+        timestamp = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp,
+                     'Content-Length': '6',
+                     'Content-Type': 'application/octet-stream',
+                     'If-None-Match': '*'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
+
+    def test_PUT_if_none_match(self):
+        # PUT with if-none-match set and nothing there should succede
+        timestamp = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp,
+                     'Content-Length': '6',
+                     'Content-Type': 'application/octet-stream',
+                     'If-None-Match': 'notthere'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 201)
+        # PUT with if-none-match of the object etag should fail
+        timestamp = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp,
+                     'Content-Length': '6',
+                     'Content-Type': 'application/octet-stream',
+                     'If-None-Match': '0b4c12d7e0a73840c1c4f148fda3b037'})
+        req.body = 'VERIFY'
+        resp = req.get_response(self.object_controller)
+        self.assertEquals(resp.status_int, 412)
 
     def test_PUT_common(self):
         timestamp = normalize_timestamp(time())
@@ -1911,16 +1960,16 @@ class TestObjectController(unittest.TestCase):
             headers={'If-Modified-Since': 'Not a valid date'})
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 200)
+
+        too_big_date_list = list(datetime.datetime.max.timetuple())
+        too_big_date_list[0] += 1  # bump up the year
+        too_big_date = strftime(
+            "%a, %d %b %Y %H:%M:%S UTC", struct_time(too_big_date_list))
         req = Request.blank(
             '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            headers={'If-Unmodified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
+            headers={'If-Unmodified-Since': too_big_date})
         resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 412)
-        req = Request.blank(
-            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'GET'},
-            headers={'If-Modified-Since': 'Sat, 29 Oct 1000 19:43:31 GMT'})
-        resp = req.get_response(self.object_controller)
-        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(resp.status_int, 200)
 
     def test_content_encoding(self):
         req = Request.blank(
@@ -3336,7 +3385,7 @@ class TestObjectController(unittest.TestCase):
                     self.assertEqual(
                         self.object_controller.logger.log_dict['info'],
                         [(('None - - [01/Jan/1970:02:46:41 +0000] "PUT'
-                           ' /sda1/p/a/c/o" 405 - "-" "-" "-" 1.0000',),
+                           ' /sda1/p/a/c/o" 405 - "-" "-" "-" 1.0000 "-"',),
                           {})])
 
     def test_not_utf8_and_not_logging_requests(self):
@@ -3469,6 +3518,22 @@ class TestObjectController(unittest.TestCase):
                     ms.assert_called_with(9)
                     self.assertEqual(
                         self.object_controller.logger.log_dict['info'], [])
+
+    def test_log_line_format(self):
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'HEAD', 'REMOTE_ADDR': '1.2.3.4'})
+        self.object_controller.logger = FakeLogger()
+        with mock.patch(
+                'time.gmtime', mock.MagicMock(side_effect=[gmtime(10001.0)])):
+            with mock.patch(
+                    'time.time',
+                    mock.MagicMock(side_effect=[10000.0, 10001.0, 10002.0])):
+                req.get_response(self.object_controller)
+        self.assertEqual(
+            self.object_controller.logger.log_dict['info'],
+            [(('1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD /sda1/p/a/c/o" '
+             '404 - "-" "-" "-" 2.0000 "-"',), {})])
 
 
 if __name__ == '__main__':

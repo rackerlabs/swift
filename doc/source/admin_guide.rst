@@ -1029,6 +1029,14 @@ If you are looking at an object on the server and need more info,
 `swift-object-info` will display the account, container, replica locations
 and metadata of the object.
 
+If you are looking at a container on the server and need more info,
+`swift-container-info` will display all the information like the account,
+container, replica locations and metadata of the container.
+
+If you are looking at an account on the server and need more info,
+`swift-account-info` will display the account, replica locations
+and metadata of the account.
+
 If you want to audit the data for an account, `swift-account-audit` can be
 used to crawl the account, checking that all containers and objects can be
 found.
@@ -1066,6 +1074,13 @@ an extra, less rate limited sweep to check for these specific files. You can
 run this command as follows:
 `swift-object-auditor /path/to/object-server/config/file.conf once -z 1000`
 "-z" means to only check for zero-byte files at 1000 files per second.
+
+At times it is useful to be able to run the object auditor on a specific
+device or set of devices.  You can run the object-auditor as follows:
+swift-object-auditor /path/to/object-server/config/file.conf once --devices=sda,sdb
+
+This will run the object auditor on only the sda and sdb devices. This param
+accepts a comma separated list of values.
 
 -----------------
 Object Replicator

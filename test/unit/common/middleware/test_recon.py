@@ -20,11 +20,10 @@ from posix import stat_result, statvfs_result
 import os
 import mock
 
-import swift.common.constraints
 from swift import __version__ as swiftver
 from swift.common.swob import Request
 from swift.common.middleware import recon
-from swift.common.utils import json
+from swift.common import utils
 
 
 def fake_check_mount(a, b):
@@ -188,10 +187,10 @@ class TestReconSuccess(TestCase):
         self.mockos = MockOS()
         self.fakecache = FakeFromCache()
         self.real_listdir = os.listdir
-        self.real_ismount = swift.common.constraints.ismount
+        self.real_ismount = utils.ismount
         self.real_statvfs = os.statvfs
         os.listdir = self.mockos.fake_listdir
-        swift.common.constraints.ismount = self.mockos.fake_ismount
+        utils.ismount = self.mockos.fake_ismount
         os.statvfs = self.mockos.fake_statvfs
         self.real_from_cache = self.app._from_recon_cache
         self.app._from_recon_cache = self.fakecache.fake_from_recon_cache
@@ -199,7 +198,7 @@ class TestReconSuccess(TestCase):
 
     def tearDown(self):
         os.listdir = self.real_listdir
-        swift.common.constraints.ismount = self.real_ismount
+        utils.ismount = self.real_ismount
         os.statvfs = self.real_statvfs
         del self.mockos
         self.app._from_recon_cache = self.real_from_cache
@@ -562,6 +561,45 @@ class TestReconSuccess(TestCase):
                 "files_processed": 2310,
                 "quarantined": 0}})
 
+    def test_get_auditor_info_object_once(self):
+        from_cache_response = {
+            "object_auditor_stats_ALL": {'disk1disk2': {
+                "audit_time": 115.14418768882751,
+                "bytes_processed": 234660,
+                "completed": 115.4512460231781,
+                "errors": 0,
+                "files_processed": 2310,
+                "quarantined": 0}},
+            "object_auditor_stats_ZBF": {'disk1disk2': {
+                "audit_time": 45.877294063568115,
+                "bytes_processed": 0,
+                "completed": 46.181446075439453,
+                "errors": 0,
+                "files_processed": 2310,
+                "quarantined": 0}}}
+        self.fakecache.fakeout_calls = []
+        self.fakecache.fakeout = from_cache_response
+        rv = self.app.get_auditor_info('object')
+        self.assertEquals(self.fakecache.fakeout_calls,
+                          [((['object_auditor_stats_ALL',
+                              'object_auditor_stats_ZBF'],
+                              '/var/cache/swift/object.recon'), {})])
+        self.assertEquals(rv, {
+            "object_auditor_stats_ALL": {'disk1disk2': {
+                "audit_time": 115.14418768882751,
+                "bytes_processed": 234660,
+                "completed": 115.4512460231781,
+                "errors": 0,
+                "files_processed": 2310,
+                "quarantined": 0}},
+            "object_auditor_stats_ZBF": {'disk1disk2': {
+                "audit_time": 45.877294063568115,
+                "bytes_processed": 0,
+                "completed": 46.181446075439453,
+                "errors": 0,
+                "files_processed": 2310,
+                "quarantined": 0}}})
+
     def test_get_unmounted(self):
         unmounted_resp = [{'device': 'fakeone', 'mounted': False},
                           {'device': 'faketwo', 'mounted': False}]
@@ -700,7 +738,7 @@ class TestReconMiddleware(unittest.TestCase):
         req = Request.blank('/recon/version',
                             environ={'REQUEST_METHOD': 'GET'})
         resp = self.app(req.environ, start_response)
-        self.assertEquals(resp, [json.dumps({'version': swiftver})])
+        self.assertEquals(resp, [utils.json.dumps({'version': swiftver})])
 
     def test_recon_get_load(self):
         get_load_resp = ['{"loadtest": "1"}']

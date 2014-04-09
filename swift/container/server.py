@@ -23,7 +23,7 @@ from xml.etree.cElementTree import Element, SubElement, tostring
 from eventlet import Timeout
 
 import swift.common.db
-from swift.container.backend import ContainerBroker
+from swift.container.backend import ContainerBroker, DATADIR
 from swift.common.db import DatabaseAlreadyExists
 from swift.common.container_sync_realms import ContainerSyncRealms
 from swift.common.request_helpers import get_param, get_listing_content_type, \
@@ -31,9 +31,9 @@ from swift.common.request_helpers import get_param, get_listing_content_type, \
 from swift.common.utils import get_logger, hash_path, public, \
     normalize_timestamp, storage_directory, validate_sync_to, \
     config_true_value, json, timing_stats, replication, \
-    override_bytes_from_content_type
-from swift.common.constraints import CONTAINER_LISTING_LIMIT, \
-    check_mount, check_float, check_utf8
+    override_bytes_from_content_type, get_log_line
+from swift.common.constraints import check_mount, check_float, check_utf8
+from swift.common import constraints
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.db_replicator import ReplicatorRpc
@@ -42,8 +42,6 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
     HTTPInsufficientStorage, HTTPException, HeaderKeyDict
-
-DATADIR = 'containers'
 
 
 class ContainerController(object):
@@ -227,6 +225,20 @@ class ContainerController(object):
                 return HTTPNoContent(request=req)
             return HTTPNotFound()
 
+    def _update_or_create(self, req, broker, timestamp):
+        if not os.path.exists(broker.db_file):
+            try:
+                broker.initialize(timestamp)
+            except DatabaseAlreadyExists:
+                pass
+            else:
+                return True  # created
+        created = broker.is_deleted()
+        broker.update_put_timestamp(timestamp)
+        if broker.is_deleted():
+            raise HTTPConflict(request=req)
+        return created
+
     @public
     @timing_stats()
     def PUT(self, req):
@@ -261,17 +273,7 @@ class ContainerController(object):
                               req.headers['x-etag'])
             return HTTPCreated(request=req)
         else:   # put container
-            if not os.path.exists(broker.db_file):
-                try:
-                    broker.initialize(timestamp)
-                    created = True
-                except DatabaseAlreadyExists:
-                    created = False
-            else:
-                created = broker.is_deleted()
-                broker.update_put_timestamp(timestamp)
-                if broker.is_deleted():
-                    return HTTPConflict(request=req)
+            created = self._update_or_create(req, broker, timestamp)
             metadata = {}
             metadata.update(
                 (key, (value, timestamp))
@@ -360,14 +362,15 @@ class ContainerController(object):
             return HTTPPreconditionFailed(body='Bad delimiter')
         marker = get_param(req, 'marker', '')
         end_marker = get_param(req, 'end_marker')
-        limit = CONTAINER_LISTING_LIMIT
+        limit = constraints.CONTAINER_LISTING_LIMIT
         given_limit = get_param(req, 'limit')
         if given_limit and given_limit.isdigit():
             limit = int(given_limit)
-            if limit > CONTAINER_LISTING_LIMIT:
+            if limit > constraints.CONTAINER_LISTING_LIMIT:
                 return HTTPPreconditionFailed(
                     request=req,
-                    body='Maximum limit is %d' % CONTAINER_LISTING_LIMIT)
+                    body='Maximum limit is %d'
+                    % constraints.CONTAINER_LISTING_LIMIT)
         out_content_type = get_listing_content_type(req)
         if self.mount_check and not check_mount(self.root, drive):
             return HTTPInsufficientStorage(drive=drive, request=req)
@@ -501,17 +504,9 @@ class ContainerController(object):
                     'ERROR __call__ error with %(method)s %(path)s '),
                     {'method': req.method, 'path': req.path})
                 res = HTTPInternalServerError(body=traceback.format_exc())
-        trans_time = '%.4f' % (time.time() - start_time)
         if self.log_requests:
-            log_message = '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %s' % (
-                req.remote_addr,
-                time.strftime('%d/%b/%Y:%H:%M:%S +0000',
-                              time.gmtime()),
-                req.method, req.path,
-                res.status.split()[0], res.content_length or '-',
-                req.headers.get('x-trans-id', '-'),
-                req.referer or '-', req.user_agent or '-',
-                trans_time)
+            trans_time = time.time() - start_time
+            log_message = get_log_line(req, res, trans_time, '')
             if req.method.upper() == 'REPLICATE':
                 self.logger.debug(log_message)
             else:

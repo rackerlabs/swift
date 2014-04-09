@@ -24,10 +24,12 @@ import eventlet.event
 import grp
 import logging
 import os
+import mock
 import random
 import re
 import socket
 import sys
+import json
 
 from textwrap import dedent
 
@@ -54,7 +56,7 @@ from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ReplicationLockTimeout)
 from swift.common import utils
 from swift.common.container_sync_realms import ContainerSyncRealms
-from swift.common.swob import Response
+from swift.common.swob import Request, Response
 from test.unit import FakeLogger
 
 
@@ -485,6 +487,29 @@ class TestUtils(unittest.TestCase):
         # reset stdio
         utils.sys.stdout = orig_stdout
         utils.sys.stderr = orig_stderr
+
+    def test_dump_recon_cache(self):
+        testdir_base = mkdtemp()
+        testcache_file = os.path.join(testdir_base, 'cache.recon')
+        logger = utils.get_logger(None, 'server', log_route='server')
+        try:
+            submit_dict = {'key1': {'value1': 1, 'value2': 2}}
+            utils.dump_recon_cache(submit_dict, testcache_file, logger)
+            fd = open(testcache_file)
+            file_dict = json.loads(fd.readline())
+            fd.close()
+            self.assertEquals(submit_dict, file_dict)
+            # Use a nested entry
+            submit_dict = {'key1': {'key2': {'value1': 1, 'value2': 2}}}
+            result_dict = {'key1': {'key2': {'value1': 1, 'value2': 2},
+                           'value1': 1, 'value2': 2}}
+            utils.dump_recon_cache(submit_dict, testcache_file, logger)
+            fd = open(testcache_file)
+            file_dict = json.loads(fd.readline())
+            fd.close()
+            self.assertEquals(result_dict, file_dict)
+        finally:
+            rmtree(testdir_base)
 
     def test_get_logger(self):
         sio = StringIO()
@@ -1050,31 +1075,80 @@ log_name = %(yarr)s'''
         self.assertNotEquals(new_handler, old_handler)
         reset_loggers()
 
-    def test_ratelimit_sleep(self):
-        running_time = 0
-        start = time.time()
-        for i in range(100):
-            running_time = utils.ratelimit_sleep(running_time, 0)
-        self.assertTrue(abs((time.time() - start) * 100) < 1)
+    def verify_under_pseudo_time(
+            self, func, target_runtime_ms=1, *args, **kwargs):
+        curr_time = [42.0]
 
-        running_time = 0
-        start = time.time()
-        for i in range(50):
-            running_time = utils.ratelimit_sleep(running_time, 200)
-        # make sure it's accurate to 10th of a second
-        self.assertTrue(abs(25 - (time.time() - start) * 100) < 10)
+        def my_time():
+            curr_time[0] += 0.001
+            return curr_time[0]
+
+        def my_sleep(duration):
+            curr_time[0] += 0.001
+            curr_time[0] += duration
+
+        with nested(
+                patch('time.time', my_time),
+                patch('time.sleep', my_sleep),
+                patch('eventlet.sleep', my_sleep)):
+            start = time.time()
+            func(*args, **kwargs)
+            # make sure it's accurate to 10th of a second, converting the time
+            # difference to milliseconds, 100 milliseconds is 1/10 of a second
+            diff_from_target_ms = abs(
+                target_runtime_ms - ((time.time() - start) * 1000))
+            self.assertTrue(diff_from_target_ms < 100,
+                            "Expected %d < 100" % diff_from_target_ms)
+
+    def test_ratelimit_sleep(self):
+
+        def testfunc():
+            running_time = 0
+            for i in range(100):
+                running_time = utils.ratelimit_sleep(running_time, -5)
+
+        self.verify_under_pseudo_time(testfunc, target_runtime_ms=1)
+
+        def testfunc():
+            running_time = 0
+            for i in range(100):
+                running_time = utils.ratelimit_sleep(running_time, 0)
+
+        self.verify_under_pseudo_time(testfunc, target_runtime_ms=1)
+
+        def testfunc():
+            running_time = 0
+            for i in range(50):
+                running_time = utils.ratelimit_sleep(running_time, 200)
+
+        self.verify_under_pseudo_time(testfunc, target_runtime_ms=250)
 
     def test_ratelimit_sleep_with_incr(self):
-        running_time = 0
-        start = time.time()
-        vals = [5, 17, 0, 3, 11, 30,
-                40, 4, 13, 2, -1] * 2  # adds up to 250 (with no -1)
-        total = 0
-        for i in vals:
-            running_time = utils.ratelimit_sleep(running_time,
-                                                 500, incr_by=i)
-            total += i
-        self.assertTrue(abs(50 - (time.time() - start) * 100) < 10)
+
+        def testfunc():
+            running_time = 0
+            vals = [5, 17, 0, 3, 11, 30,
+                    40, 4, 13, 2, -1] * 2  # adds up to 248
+            total = 0
+            for i in vals:
+                running_time = utils.ratelimit_sleep(running_time,
+                                                     500, incr_by=i)
+                total += i
+            self.assertEquals(248, total)
+
+        self.verify_under_pseudo_time(testfunc, target_runtime_ms=500)
+
+    def test_ratelimit_sleep_with_sleep(self):
+
+        def testfunc():
+            running_time = 0
+            sleeps = [0] * 7 + [.2] * 3 + [0] * 30
+            for i in sleeps:
+                running_time = utils.ratelimit_sleep(running_time, 40,
+                                                     rate_buffer=1)
+                time.sleep(i)
+
+        self.verify_under_pseudo_time(testfunc, target_runtime_ms=900)
 
     def test_urlparse(self):
         parsed = utils.urlparse('http://127.0.0.1/')
@@ -1097,17 +1171,6 @@ log_name = %(yarr)s'''
 
         parsed = utils.urlparse('www.example.com')
         self.assertEquals(parsed.hostname, '')
-
-    def test_ratelimit_sleep_with_sleep(self):
-        running_time = 0
-        start = time.time()
-        sleeps = [0] * 7 + [.2] * 3 + [0] * 30
-        for i in sleeps:
-            running_time = utils.ratelimit_sleep(running_time, 40,
-                                                 rate_buffer=1)
-            time.sleep(i)
-        # make sure it's accurate to 10th of a second
-        self.assertTrue(abs(100 - (time.time() - start) * 100) < 10)
 
     def test_search_tree(self):
         # file match & ext miss
@@ -1831,6 +1894,22 @@ cluster_dfw1 = http://dfw1.host/v1/
             utils.get_hmac('GET', '/path', 1, 'abc'),
             'b17f6ff8da0e251737aa9e3ee69a881e3e092e2f')
 
+    def test_get_log_line(self):
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'HEAD', 'REMOTE_ADDR': '1.2.3.4'})
+        res = Response()
+        trans_time = 1.2
+        additional_info = 'some information'
+        exp_line = '1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD ' \
+            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information"'
+        with mock.patch(
+                'time.gmtime',
+                mock.MagicMock(side_effect=[time.gmtime(10001.0)])):
+            self.assertEquals(
+                exp_line,
+                utils.get_log_line(req, res, trans_time, additional_info))
+
 
 class TestSwiftInfo(unittest.TestCase):
 
@@ -2245,13 +2324,14 @@ class UnsafeXrange(object):
         self.current = 0
         self.concurrent_calls = 0
         self.upper_bound = upper_bound
+        self.concurrent_call = False
 
     def __iter__(self):
         return self
 
     def next(self):
         if self.concurrent_calls > 0:
-            raise ValueError("concurrent access is bad, mmmkay? (%r)")
+            self.concurrent_call = True
 
         self.concurrent_calls += 1
         try:
@@ -2363,33 +2443,60 @@ class TestAffinityLocalityPredicate(unittest.TestCase):
 
 
 class TestRateLimitedIterator(unittest.TestCase):
+
+    def run_under_pseudo_time(
+            self, func, *args, **kwargs):
+        curr_time = [42.0]
+
+        def my_time():
+            curr_time[0] += 0.001
+            return curr_time[0]
+
+        def my_sleep(duration):
+            curr_time[0] += 0.001
+            curr_time[0] += duration
+
+        with nested(
+                patch('time.time', my_time),
+                patch('eventlet.sleep', my_sleep)):
+            return func(*args, **kwargs)
+
     def test_rate_limiting(self):
-        limited_iterator = utils.RateLimitedIterator(xrange(9999), 100)
-        got = []
-        started_at = time.time()
-        try:
-            while time.time() - started_at < 0.1:
-                got.append(limited_iterator.next())
-        except StopIteration:
-            pass
+
+        def testfunc():
+            limited_iterator = utils.RateLimitedIterator(xrange(9999), 100)
+            got = []
+            started_at = time.time()
+            try:
+                while time.time() - started_at < 0.1:
+                    got.append(limited_iterator.next())
+            except StopIteration:
+                pass
+            return got
+
+        got = self.run_under_pseudo_time(testfunc)
         # it's 11, not 10, because ratelimiting doesn't apply to the very
         # first element.
-        #
-        # Ideally this'd be == 11, but that might fail on slow machines, and
-        # the last thing we need is another flaky test.
-        self.assertTrue(len(got) <= 11)
+        self.assertEquals(len(got), 11)
 
     def test_limit_after(self):
-        limited_iterator = utils.RateLimitedIterator(xrange(9999), 100,
-                                                     limit_after=5)
-        got = []
-        started_at = time.time()
-        try:
-            while time.time() - started_at < 0.1:
-                got.append(limited_iterator.next())
-        except StopIteration:
-            pass
-        self.assertTrue(len(got) <= 16)
+
+        def testfunc():
+            limited_iterator = utils.RateLimitedIterator(
+                xrange(9999), 100, limit_after=5)
+            got = []
+            started_at = time.time()
+            try:
+                while time.time() - started_at < 0.1:
+                    got.append(limited_iterator.next())
+            except StopIteration:
+                pass
+            return got
+
+        got = self.run_under_pseudo_time(testfunc)
+        # it's 16, not 15, because ratelimiting doesn't apply to the very
+        # first element.
+        self.assertEquals(len(got), 16)
 
 
 class TestGreenthreadSafeIterator(unittest.TestCase):
@@ -2409,19 +2516,20 @@ class TestGreenthreadSafeIterator(unittest.TestCase):
         for _ in xrange(2):
             pile.spawn(self.increment, iterable)
 
-        try:
-            sorted([resp for resp in pile])
-            self.assertTrue(False, "test setup is insufficiently crazy")
-        except ValueError:
-            pass
+        sorted([resp for resp in pile])
+        self.assertTrue(
+            iterable.concurrent_call, 'test setup is insufficiently crazy')
 
     def test_access_is_serialized(self):
         pile = eventlet.GreenPile(2)
-        iterable = utils.GreenthreadSafeIterator(UnsafeXrange(10))
+        unsafe_iterable = UnsafeXrange(10)
+        iterable = utils.GreenthreadSafeIterator(unsafe_iterable)
         for _ in xrange(2):
             pile.spawn(self.increment, iterable)
         response = sorted(sum([resp for resp in pile], []))
         self.assertEquals(range(1, 11), response)
+        self.assertTrue(
+            not unsafe_iterable.concurrent_call, 'concurrent call occurred')
 
 
 class TestStatsdLoggingDelegation(unittest.TestCase):

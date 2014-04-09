@@ -29,7 +29,8 @@ from hashlib import md5
 from eventlet import sleep, Timeout
 
 from swift.common.utils import public, get_logger, \
-    config_true_value, timing_stats, replication, normalize_delete_at_timestamp
+    config_true_value, timing_stats, replication, \
+    normalize_delete_at_timestamp, get_log_line
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_object_creation, \
     check_float, check_utf8
@@ -388,6 +389,16 @@ class ObjectController(object):
             orig_metadata = disk_file.read_metadata()
         except (DiskFileNotExist, DiskFileQuarantined):
             orig_metadata = {}
+
+        # Checks for If-None-Match
+        if request.if_none_match is not None and orig_metadata:
+            if '*' in request.if_none_match:
+                # File exists already so return 412
+                return HTTPPreconditionFailed(request=request)
+            if orig_metadata.get('ETag') in request.if_none_match:
+                # The current ETag matches, so return 412
+                return HTTPPreconditionFailed(request=request)
+
         orig_timestamp = orig_metadata.get('X-Timestamp')
         if orig_timestamp and orig_timestamp >= request.headers['x-timestamp']:
             return HTTPConflict(request=request)
@@ -481,21 +492,16 @@ class ObjectController(object):
                 obj_size = int(metadata['Content-Length'])
                 file_x_ts = metadata['X-Timestamp']
                 file_x_ts_flt = float(file_x_ts)
-                try:
-                    if_unmodified_since = request.if_unmodified_since
-                except (OverflowError, ValueError):
-                    # catches timestamps before the epoch
-                    return HTTPPreconditionFailed(request=request)
                 file_x_ts_utc = datetime.fromtimestamp(file_x_ts_flt, UTC)
+
+                if_unmodified_since = request.if_unmodified_since
                 if if_unmodified_since and file_x_ts_utc > if_unmodified_since:
                     return HTTPPreconditionFailed(request=request)
-                try:
-                    if_modified_since = request.if_modified_since
-                except (OverflowError, ValueError):
-                    # catches timestamps before the epoch
-                    return HTTPPreconditionFailed(request=request)
+
+                if_modified_since = request.if_modified_since
                 if if_modified_since and file_x_ts_utc <= if_modified_since:
                     return HTTPNotModified(request=request)
+
                 keep_cache = (self.keep_cache_private or
                               ('X-Auth-Token' not in request.headers and
                                'X-Storage-Token' not in request.headers))
@@ -675,15 +681,7 @@ class ObjectController(object):
                 res = HTTPInternalServerError(body=traceback.format_exc())
         trans_time = time.time() - start_time
         if self.log_requests:
-            log_line = '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f' % (
-                req.remote_addr,
-                time.strftime('%d/%b/%Y:%H:%M:%S +0000',
-                              time.gmtime()),
-                req.method, req.path, res.status.split()[0],
-                res.content_length or '-', req.referer or '-',
-                req.headers.get('x-trans-id', '-'),
-                req.user_agent or '-',
-                trans_time)
+            log_line = get_log_line(req, res, trans_time, '')
             if req.method in ('REPLICATE', 'REPLICATION') or \
                     'X-Backend-Replication' in req.headers:
                 self.logger.debug(log_line)
