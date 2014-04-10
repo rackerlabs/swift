@@ -1,3 +1,10 @@
+swift (1.13.1.rc1.25.g2f00ce7~rax2) lucid; urgency=low
+
+  * Fix logging issue when services stop on py26
+  * Set permissions on generated ring files
+
+ -- Michael Barton <michael.barton@rackspace.com>  Wed, 10 Apr 2014 20:15:37 +0000
+
 swift (1.13.1.rc1.25.g2f00ce7~rax1) lucid; urgency=low
 
   * 58fe2f2 Add tests and comments re constraints in /info
