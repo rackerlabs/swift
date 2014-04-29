@@ -86,6 +86,7 @@ class TestCliInfo(unittest.TestCase):
             created_at=100.1,
             put_timestamp=106.3,
             delete_timestamp=107.9,
+            container_count='3',
             object_count='20',
             bytes_used='42')
         info['hash'] = 'abaddeadbeefcafe'
@@ -102,6 +103,7 @@ Metadata:
   Created at: 1970-01-01 00:01:40.100000 (100.1)
   Put Timestamp: 1970-01-01 00:01:46.300000 (106.3)
   Delete Timestamp: 1970-01-01 00:01:47.900000 (107.9)
+  Container Count: 3
   Object Count: 20
   Bytes Used: 42
   Chexor: abaddeadbeefcafe
@@ -110,7 +112,8 @@ Metadata:
 No system metadata found in db file
   User Metadata: {'mydata': 'swift'}'''
 
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEquals(sorted(out.getvalue().strip().split('\n')),
+                          sorted(exp_out.split('\n')))
 
         info = dict(
             account='acct',
@@ -152,7 +155,8 @@ Metadata:
   X-Container-Foo: bar
   System Metadata: {'mydata': 'swift'}
 No user metadata found in db file'''
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEquals(sorted(out.getvalue().strip().split('\n')),
+                          sorted(exp_out.split('\n')))
 
     def test_print_ring_locations(self):
         self.assertRaisesMessage(ValueError, 'None type', print_ring_locations,

@@ -953,7 +953,7 @@ class Request(object):
         :param rest_with_last: If True, trailing data will be returned as part
                                of last segment.  If False, and there is
                                trailing data, raises ValueError.
-        :returns: list of segments with a length of maxsegs (non-existant
+        :returns: list of segments with a length of maxsegs (non-existent
                   segments will return as None)
         :raises: ValueError if given an invalid path
         """
@@ -1113,6 +1113,18 @@ class Response(object):
                 # current entity exists, the server MUST NOT perform the
                 # requested method, and MUST return a 412 (Precondition
                 # Failed) response. [RFC 2616 section 14.24]
+                self.status = 412
+                self.content_length = 0
+                return ['']
+
+            if self.last_modified and self.request.if_modified_since \
+               and self.last_modified <= self.request.if_modified_since:
+                self.status = 304
+                self.content_length = 0
+                return ['']
+
+            if self.last_modified and self.request.if_unmodified_since \
+               and self.last_modified > self.request.if_unmodified_since:
                 self.status = 412
                 self.content_length = 0
                 return ['']

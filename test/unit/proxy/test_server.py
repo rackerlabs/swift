@@ -1779,6 +1779,14 @@ class TestObjectController(unittest.TestCase):
             resp = req.get_response(self.app)
             self.assertEquals(resp.status_int, 503)
 
+    def test_node_request_setting(self):
+        baseapp = proxy_server.Application({'request_node_count': '3'},
+                                           FakeMemcache(),
+                                           container_ring=FakeRing(),
+                                           account_ring=FakeRing(),
+                                           object_ring=FakeRing())
+        self.assertEquals(baseapp.request_node_count(3), 3)
+
     def test_iter_nodes(self):
         with save_globals():
             try:
@@ -4224,17 +4232,17 @@ class TestContainerController(unittest.TestCase):
             # return 200 and cache 200 for and container
             test_status_map((200, 200, 404, 404), 200, 200, 200)
             test_status_map((200, 200, 500, 404), 200, 200, 200)
-            # return 304 dont cache container
+            # return 304 don't cache container
             test_status_map((200, 304, 500, 404), 304, None, 200)
             # return 404 and cache 404 for container
             test_status_map((200, 404, 404, 404), 404, 404, 200)
             test_status_map((200, 404, 404, 500), 404, 404, 200)
-            # return 503, dont cache container
+            # return 503, don't cache container
             test_status_map((200, 500, 500, 500), 503, None, 200)
             self.assertFalse(self.app.account_autocreate)
 
             # In all the following tests cache 404 for account
-            # return 404 (as account is not found) and dont cache container
+            # return 404 (as account is not found) and don't cache container
             test_status_map((404, 404, 404), 404, None, 404)
             # This should make no difference
             self.app.account_autocreate = True
@@ -5064,7 +5072,7 @@ class TestContainerController(unittest.TestCase):
 
         req = Request.blank('/v1/a/c', method='PUT', headers={'': ''})
         with save_globals():
-            new_connect = set_http_connect(200,  # account existance check
+            new_connect = set_http_connect(200,  # account existence check
                                            201, 201, 201,
                                            give_connect=capture_timestamps)
             resp = self.app.handle_request(req)
@@ -5073,7 +5081,7 @@ class TestContainerController(unittest.TestCase):
         self.assertRaises(StopIteration, new_connect.code_iter.next)
         self.assertEqual(2, resp.status_int // 100)
 
-        timestamps.pop(0)  # account existance check
+        timestamps.pop(0)  # account existence check
         self.assertEqual(3, len(timestamps))
         for timestamp in timestamps:
             self.assertEqual(timestamp, timestamps[0])
@@ -5089,7 +5097,7 @@ class TestContainerController(unittest.TestCase):
         req = Request.blank('/v1/a/c', method='DELETE', headers={'': ''})
         self.app.update_request(req)
         with save_globals():
-            new_connect = set_http_connect(200,  # account existance check
+            new_connect = set_http_connect(200,  # account existence check
                                            201, 201, 201,
                                            give_connect=capture_timestamps)
             resp = self.app.handle_request(req)
@@ -5098,7 +5106,7 @@ class TestContainerController(unittest.TestCase):
         self.assertRaises(StopIteration, new_connect.code_iter.next)
         self.assertEqual(2, resp.status_int // 100)
 
-        timestamps.pop(0)  # account existance check
+        timestamps.pop(0)  # account existence check
         self.assertEqual(3, len(timestamps))
         for timestamp in timestamps:
             self.assertEqual(timestamp, timestamps[0])
