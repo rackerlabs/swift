@@ -95,6 +95,8 @@ def run_daemon(klass, conf_file, section_name='', once=False, **kwargs):
     reserve = int(conf.get('fallocate_reserve', 0))
     if reserve > 0:
         utils.FALLOCATE_RESERVE = reserve
+    utils.DISABLE_FSYNC = utils.config_true_value(
+        conf.get('disable_fsync', 'f'))
 
     # By default, disable eventlet printing stacktraces
     eventlet_debug = utils.config_true_value(conf.get('eventlet_debug', 'no'))

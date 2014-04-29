@@ -80,6 +80,8 @@ SysLogHandler.priority_map['NOTICE'] = 'notice'
 _sys_fallocate = None
 _posix_fadvise = None
 
+DISABLE_FSYNC = False
+
 # If set to non-zero, fallocate routines will fail based on free space
 # available being at or below this amount, in bytes.
 FALLOCATE_RESERVE = 0
@@ -504,6 +506,8 @@ def fsync(fd):
 
     :param fd: file descriptor
     """
+    if DISABLE_FSYNC:
+        return
     if hasattr(fcntl, 'F_FULLSYNC'):
         try:
             fcntl.fcntl(fd, fcntl.F_FULLSYNC)
@@ -519,6 +523,8 @@ def fdatasync(fd):
 
     :param fd: file descriptor
     """
+    if DISABLE_FSYNC:
+        return
     try:
         os.fdatasync(fd)
     except AttributeError:
@@ -1640,7 +1646,8 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
     with os.fdopen(fd, 'wb') as fo:
         pickle.dump(obj, fo, pickle_protocol)
         fo.flush()
-        os.fsync(fd)
+        if not DISABLE_FSYNC:
+            os.fsync(fd)
         renamer(tmppath, dest)
 
 
