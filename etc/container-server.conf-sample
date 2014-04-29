@@ -8,6 +8,7 @@
 # devices = /srv/node
 # mount_check = true
 # disable_fallocate = false
+# disable_fsync = false
 #
 # Use an integer to override the number of pre-forked processes that will
 # accept connections.

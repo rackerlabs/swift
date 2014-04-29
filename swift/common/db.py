@@ -30,7 +30,7 @@ from eventlet import sleep, Timeout
 import sqlite3
 
 from swift.common.utils import json, normalize_timestamp, renamer, \
-    mkdirs, lock_parent_directory, fallocate
+    mkdirs, lock_parent_directory, fallocate, config_true_value, DISABLE_FSYNC
 from swift.common.exceptions import LockTimeout
 
 
@@ -282,7 +282,8 @@ class DatabaseBroker(object):
         if tmp_db_file:
             conn.close()
             with open(tmp_db_file, 'r+b') as fp:
-                os.fsync(fp.fileno())
+                if not DISABLE_FSYNC:
+                    os.fsync(fp.fileno())
             with lock_parent_directory(self.db_file, self.pending_timeout):
                 if os.path.exists(self.db_file):
                     # It's as if there was a "condition" where different parts
