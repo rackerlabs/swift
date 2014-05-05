@@ -1,3 +1,15 @@
+swift (1.13.1.62.g6ac036f~rax1) lucid; urgency=medium
+
+  * Experimental disable_fsync support
+  * bcdafa3 Sleep between object ZBF process forks
+  * 067b41e In-process swift server for functional tests
+  * 3af5216 Sort the log file dates in reverse order
+  * 1fb0709 Unit test for common.utils.cache_from_env
+  * f469d42 TempURL: Fixed bug with \r or \n in disposition.
+  * 1f0058e Fix logging issue when services stop on py26
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Mon, 05 May 2014 16:09:22 +0000
+
 swift (1.13.1.rc1.25.g2f00ce7~rax2) lucid; urgency=low
 
   * Fix logging issue when services stop on py26
