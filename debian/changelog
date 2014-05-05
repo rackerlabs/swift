@@ -1,4 +1,4 @@
-swift (1.13.1.62.g6ac036f~rax1) lucid; urgency=medium
+swift (1.13.1.rc1.notreally.62.g6ac036f~rax1) lucid; urgency=low
 
   * Experimental disable_fsync support
   * bcdafa3 Sleep between object ZBF process forks
