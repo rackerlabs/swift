@@ -62,7 +62,14 @@ from test.unit import FakeLogger
 
 class MockOs(object):
 
-    def __init__(self, pass_funcs=[], called_funcs=[], raise_funcs=[]):
+    def __init__(self, pass_funcs=None, called_funcs=None, raise_funcs=None):
+        if pass_funcs is None:
+            pass_funcs = []
+        if called_funcs is None:
+            called_funcs = []
+        if raise_funcs is None:
+            raise_funcs = []
+
         self.closed_fds = []
         for func in pass_funcs:
             setattr(self, func, self.pass_func)
@@ -1241,6 +1248,34 @@ log_name = %(yarr)s'''
         for i in range(4):
             conf_dir = os.path.join(t, 'object-server/%d.conf.d' % (i + 1))
             self.assert_(conf_dir in conf_dirs)
+
+    def test_search_tree_conf_dir_with_named_conf_match(self):
+        files = (
+            'proxy-server/proxy-server.conf.d/base.conf',
+            'proxy-server/proxy-server.conf.d/pipeline.conf',
+            'proxy-server/proxy-noauth.conf.d/base.conf',
+            'proxy-server/proxy-noauth.conf.d/pipeline.conf',
+        )
+        with temptree(files) as t:
+            conf_dirs = utils.search_tree(t, 'proxy-server', 'noauth.conf',
+                                          dir_ext='noauth.conf.d')
+        self.assertEquals(len(conf_dirs), 1)
+        conf_dir = conf_dirs[0]
+        expected = os.path.join(t, 'proxy-server/proxy-noauth.conf.d')
+        self.assertEqual(conf_dir, expected)
+
+    def test_search_tree_conf_dir_pid_with_named_conf_match(self):
+        files = (
+            'proxy-server/proxy-server.pid.d',
+            'proxy-server/proxy-noauth.pid.d',
+        )
+        with temptree(files) as t:
+            pid_files = utils.search_tree(t, 'proxy-server',
+                                          exts=['noauth.pid', 'noauth.pid.d'])
+        self.assertEquals(len(pid_files), 1)
+        pid_file = pid_files[0]
+        expected = os.path.join(t, 'proxy-server/proxy-noauth.pid.d')
+        self.assertEqual(pid_file, expected)
 
     def test_write_file(self):
         with temptree([]) as t:
