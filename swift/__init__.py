@@ -29,7 +29,7 @@ class Version(object):
             return '%s-dev' % (self.canonical_version,)
 
 
-_version = Version('1.13.1.rc1.notreally.62.g6ac036f', False)
+_version = Version('1.13.1.rc1.notreally.84.g5530078', False)
 __version__ = _version.pretty_version
 __canonical_version__ = _version.canonical_version
 

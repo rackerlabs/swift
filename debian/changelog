@@ -1,3 +1,21 @@
+swift (1.13.1.rc1.notreally.84.g5530078~rax1) lucid; urgency=medium
+
+  * fe66203 added Benchmarks/Load Generators section
+  * 85c03d8 taking the global reqs that we can
+  * 5f0160b Change the default token logged length to 16
+  * 4acce68 Make the new xprofile tests optional.
+  * 0a122c1 Add targeted config loading to swift-init
+  * fac6568 Added a tox job for running flake8 under Python 3
+  * d8e2043 Let users add their own txid suffixes
+  * 717485a Fixed several Python3 syntax errors
+  * 4cd3478 debug level logs should not be translated
+  * b4c5a13 Uses None instead of mutables for function param defaults
+  * 1dfe518 Update mailmap for Morgan Fainberg
+  * f5caac4 Add profiling middleware in Swift
+  * 5b8fad7 Fix coverage report for newer versions of coverage
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Thu, 22 May 2014 15:59:34 +0000
+
 swift (1.13.1.rc1.notreally.62.g6ac036f~rax1) lucid; urgency=low
 
   * Experimental disable_fsync support

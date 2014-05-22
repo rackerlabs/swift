@@ -116,6 +116,7 @@ setup(
             'filter_factory',
             'container_sync=swift.common.middleware.container_sync:'
             'filter_factory',
+            'xprofile=swift.common.middleware.xprofile:filter_factory',
         ],
     },
 )
