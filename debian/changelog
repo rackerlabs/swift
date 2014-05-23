@@ -1,3 +1,9 @@
+swift (1.13.1.rc1.notreally.84.g5530078~rax2) lucid; urgency=medium
+
+  * 2d00f7b New log_max_line_length option.
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Fri, 23 May 2014 15:55:29 +0000
+
 swift (1.13.1.rc1.notreally.84.g5530078~rax1) lucid; urgency=medium
 
   * fe66203 added Benchmarks/Load Generators section
