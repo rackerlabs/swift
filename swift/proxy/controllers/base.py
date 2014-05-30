@@ -212,8 +212,9 @@ def cors_validation(func):
             # Call through to the decorated method
             resp = func(*a, **kw)
 
-            if controller.app.strict_cors_mode and \
-                    not controller.is_origin_allowed(cors_info, req_origin):
+            is_origin_allowed = controller.is_origin_allowed(
+                cors_info, req_origin)
+            if controller.app.strict_cors_mode and not is_origin_allowed:
                 return resp
 
             # Expose,
@@ -249,6 +250,15 @@ def cors_validation(func):
                     resp.headers['Access-Control-Allow-Origin'] = '*'
                 else:
                     resp.headers['Access-Control-Allow-Origin'] = req_origin
+
+                if not is_origin_allowed and \
+                        'Access-Control-Allow-Origin' in resp.headers:
+                    user_agent = \
+                        quote(req.headers.get('User-Agent', 'NONE'))[:60]
+                    controller.app.logger.error(
+                        'COORS problem: %s/%s. UA: %s' % (
+                        controller.account_name, controller.container_name,
+                        user_agent))
 
             return resp
         else:
