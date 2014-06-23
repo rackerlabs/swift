@@ -1,3 +1,53 @@
+swift (2.0.0.0~rax1) lucid; urgency=medium
+
+  * 1feaf6e release notes for Swift 2.0
+  * e52e8bc Add Storage Policy Documentation
+  * c1dc2fa Add two vector timestamps
+  * 8d20e0e Fix object-expirer for missing objects
+  * 2e1ea82 Add Storage Policy support to the Account Reaper
+  * 8326dc9 Add Storage Policy Support to Recon Middleware
+  * 6da9799 Add Storage Policy Support to Container Sync
+  * 019d7f5 Add Storage Policy Support to list_endpoints
+  * ad2a9ce Fixes probe tests with non-zero default storage policy
+  * fbcfb83 Add LRUCache to common.utils
+  * a14d2c8 Enqueue misplaced objects during container replication
+  * 6cc10d1 Update bin scripts to be storage policy aware
+  * c11ac01 Add functional tests for Storage Policy
+  * b02f0db Refactoring storage policies merge_timestamps
+  * 00a162c Add Storage Policy Support to Accounts
+  * 81bc31e Merge container storage_policy_index
+  * 3dff124 Add reconciler probetest outline
+  * 3fc4d6f Add container-reconciler daemon
+  * d495d3e Extend direct_client
+  * 8bec508 Extend interface on InternalClient
+  * 0015019 Put X-Backend-Timestamp in object 404 responses
+  * b9707d4 Add Storage Policy Support to ssync
+  * 04f2970 Add storage policy support for the Replicator
+  * 1a0e4d9 Add Storage Policy Support to the Auditor
+  * d5ca365 Add Storage Policy support to Object Updates
+  * 3824ff3 Add Storage Policy support to Object Server
+  * 4321bb0 Add Storage Policy support to Containers
+  * 7624b19 Update FakeRing and FakeLogger
+  * 46c68ae Add Storage Policy Support
+  * e00da6c properly quote www-authenticate header value
+  * ab51095 xLO bug with auth tokens expiring during download.
+  * 7056ec6 Fix file uploads > 2 GiB in formpost middleware
+  * 19a574f Fixes typo in man page
+  * 3beea4d replaced e.message with a bare "e" object ref
+  * a6da4b8 isolate representation from content in GET request
+  * b5d7c1e Remove unused variable
+  * 11bbc09 Add debug logging to container sync requests
+  * 4085883 Add Ratelimit parameters to /info
+  * 181e949 Fixed a handful of typos
+  * 9cbf8a3 Add ability to remove subsections from /info
+  * 4350152 Container sync no longer sending swift_bytes value
+  * ac2dbb0 replace string format arguments with function parameters
+  * 4ce9b25 Print pipeline names in the reported pipeline
+  * b7659be Add --quoted option to swift-temp-url
+  * 14e2a22 Plumb insecure flag to functests
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Mon, 23 Jun 2014 17:21:13 +0000
+
 swift (1.13.1.rc1.notreally.84.g5530078~rax2) lucid; urgency=medium
 
   * 2d00f7b New log_max_line_length option.
