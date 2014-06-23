@@ -23,6 +23,7 @@ from StringIO import StringIO
 from urllib import quote
 
 import swift.common.swob
+from swift.common import utils, exceptions
 
 
 class TestHeaderEnvironProxy(unittest.TestCase):
@@ -464,6 +465,25 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.params['a'], 'b')
         self.assertEquals(req.params['c'], 'd')
 
+    def test_timestamp_missing(self):
+        req = swift.common.swob.Request.blank('/')
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp_invalid(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': 'asdf'})
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': '1402447134.13507_00000001'})
+        expected = utils.Timestamp('1402447134.13507', offset=1)
+        self.assertEqual(req.timestamp, expected)
+        self.assertEqual(req.timestamp.normal, expected.normal)
+        self.assertEqual(req.timestamp.internal, expected.internal)
+
     def test_path(self):
         req = swift.common.swob.Request.blank('/hi?a=b&c=d')
         self.assertEquals(req.path, '/hi')
@@ -599,6 +619,28 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(resp.status_int, 401)
         self.assert_('Www-Authenticate' in resp.headers)
         self.assertEquals('Me realm="whatever"',
+                          resp.headers['Www-Authenticate'])
+
+    def test_401_www_authenticate_is_quoted(self):
+
+        def test_app(environ, start_response):
+            start_response('401 Unauthorized', [])
+            return ['hi']
+
+        hacker = 'account-name\n\n<b>foo<br>'  # url injection test
+        quoted_hacker = quote(hacker)
+        req = swift.common.swob.Request.blank('/v1/' + hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
+                          resp.headers['Www-Authenticate'])
+
+        req = swift.common.swob.Request.blank('/v1/' + quoted_hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
                           resp.headers['Www-Authenticate'])
 
     def test_not_401(self):

@@ -13,11 +13,13 @@
 # which will disable admin calls to /info.
 # admin_key = secret_admin_key
 #
-# Allows the ability to withhold sections from showing up in the public
-# calls to /info.  The following would cause the sections 'container_quotas'
-# and 'tempurl' to not be listed.  Default is empty, allowing all registered
-# fetures to be listed via HTTP GET /info.
-# disallowed_sections = container_quotas, tempurl
+# Allows the ability to withhold sections from showing up in the public calls
+# to /info.  You can withhold subsections by separating the dict level with a
+# ".".  The following would cause the sections 'container_quotas' and 'tempurl'
+# to not be listed, and the key max_failed_deletes would be removed from
+# bulk_delete.  Default is empty, allowing all registered fetures to be listed
+# via HTTP GET /info.
+# disallowed_sections = container_quotas, tempurl, bulk_delete.max_failed_deletes
 
 # Use an integer to override the number of pre-forked processes that will
 # accept connections.  Should default to the number of effective cpu
@@ -73,7 +75,7 @@
 # eventlet_debug = false
 
 [pipeline:main]
-pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk tempurl slo dlo ratelimit tempauth container-quotas account-quotas proxy-logging proxy-server
+pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk tempurl ratelimit tempauth container-quotas account-quotas slo dlo proxy-logging proxy-server
 
 [app:proxy-server]
 use = egg:swift#proxy
@@ -524,7 +526,7 @@ use = egg:swift#bulk
 [filter:container-quotas]
 use = egg:swift#container_quotas
 
-# Note: Put before both ratelimit and auth in the pipeline.
+# Note: Put after auth and staticweb in the pipeline.
 [filter:slo]
 use = egg:swift#slo
 # max_manifest_segments = 1000
@@ -541,8 +543,7 @@ use = egg:swift#slo
 # Time limit on GET requests (seconds)
 # max_get_time = 86400
 
-# Note: Put before both ratelimit and auth in the pipeline, but after
-# gatekeeper, catch_errors, and proxy_logging (the first instance).
+# Note: Put after auth and staticweb in the pipeline.
 # If you don't put it in the pipeline, it will be inserted for you.
 [filter:dlo]
 use = egg:swift#dlo
@@ -577,6 +578,8 @@ use = egg:swift#container_sync
 # Updating those will have to be done manually, as knowing what the true realm
 # endpoint should be cannot always be guessed.
 # allow_full_urls = true
+# Set this to specify this clusters //realm/cluster as "current" in /info
+# current = //REALM/CLUSTER
 
 # Note: Put it at the beginning of the pipleline to profile all middleware. But
 # it is safer to put this after catch_errors, gatekeeper and healthcheck.

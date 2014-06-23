@@ -21,6 +21,7 @@ import locale
 import eventlet
 import eventlet.debug
 import functools
+import random
 from time import time, sleep
 from httplib import HTTPException
 from urlparse import urlparse
@@ -37,11 +38,12 @@ from test.functional.swift_test_client import Connection, ResponseError
 # on file systems that don't support extended attributes.
 from test.unit import debug_logger, FakeMemcache
 
-from swift.common import constraints, utils, ring
+from swift.common import constraints, utils, ring, storage_policy
 from swift.common.wsgi import monkey_patch_mimetools
 from swift.common.middleware import catch_errors, gatekeeper, healthcheck, \
     proxy_logging, container_sync, bulk, tempurl, slo, dlo, ratelimit, \
     tempauth, container_quotas, account_quotas
+from swift.common.utils import config_true_value
 from swift.proxy import server as proxy_server
 from swift.account import server as account_server
 from swift.container import server as container_server
@@ -60,6 +62,18 @@ eventlet.debug.hub_exceptions(False)
 
 from swiftclient import get_auth, http_connection
 
+has_insecure = False
+try:
+    from swiftclient import __version__ as client_version
+    # Prevent a ValueError in StrictVersion with '2.0.3.68.ga99c2ff'
+    client_version = '.'.join(client_version.split('.')[:3])
+except ImportError:
+    # Pre-PBR we had version, not __version__. Anyhow...
+    client_version = '1.2'
+from distutils.version import StrictVersion
+if StrictVersion(client_version) >= StrictVersion('2.0'):
+    has_insecure = True
+
 
 config = {}
 web_front_end = None
@@ -76,6 +90,8 @@ swift_test_perm = ['', '', '']
 skip, skip2, skip3 = False, False, False
 
 orig_collate = ''
+insecure = False
+
 orig_hash_path_suff_pref = ('', '')
 orig_swift_conf_name = None
 
@@ -136,6 +152,8 @@ def in_process_setup(the_object_server=object_server):
     orig_swift_conf_name = utils.SWIFT_CONF_FILE
     utils.SWIFT_CONF_FILE = swift_conf
     constraints.reload_constraints()
+    storage_policy.SWIFT_CONF_FILE = swift_conf
+    storage_policy.reload_storage_policies()
     global config
     if constraints.SWIFT_CONSTRAINTS_LOADED:
         # Use the swift constraints that are loaded for the test framework
@@ -329,7 +347,7 @@ def get_cluster_info():
         # test.conf data
         pass
     else:
-        eff_constraints.update(cluster_info['swift'])
+        eff_constraints.update(cluster_info.get('swift', {}))
 
     # Finally, we'll allow any constraint present in the swift-constraints
     # section of test.conf to override everything. Note that only those
@@ -394,6 +412,9 @@ def setup_package():
     orig_collate = locale.setlocale(locale.LC_COLLATE)
     locale.setlocale(locale.LC_COLLATE, config.get('collate', 'C'))
 
+    global insecure
+    insecure = config_true_value(config.get('insecure', False))
+
     global swift_test_auth_version
     global swift_test_auth
     global swift_test_user
@@ -405,7 +426,7 @@ def setup_package():
         swift_test_auth_version = str(config.get('auth_version', '1'))
 
         swift_test_auth = 'http'
-        if config.get('auth_ssl', 'no').lower() in ('yes', 'true', 'on', '1'):
+        if config_true_value(config.get('auth_ssl', 'no')):
             swift_test_auth = 'https'
         if 'auth_prefix' not in config:
             config['auth_prefix'] = '/'
@@ -517,6 +538,12 @@ parsed = [None, None, None]
 conn = [None, None, None]
 
 
+def connection(url):
+    if has_insecure:
+        return http_connection(url, insecure=insecure)
+    return http_connection(url)
+
+
 def retry(func, *args, **kwargs):
     """
     You can use the kwargs to override:
@@ -550,7 +577,7 @@ def retry(func, *args, **kwargs):
                 parsed[use_account] = conn[use_account] = None
             if not parsed[use_account] or not conn[use_account]:
                 parsed[use_account], conn[use_account] = \
-                    http_connection(url[use_account])
+                    connection(url[use_account])
 
             # default resource is the account url[url_account]
             resource = kwargs.pop('resource', '%(storage_url)s')
@@ -596,6 +623,18 @@ def load_constraint(name):
     return c
 
 
+def get_storage_policy_from_cluster_info(info):
+    policies = info['swift'].get('policies', {})
+    default_policy = []
+    non_default_policies = []
+    for p in policies:
+        if p.get('default', {}):
+            default_policy.append(p)
+        else:
+            non_default_policies.append(p)
+    return default_policy, non_default_policies
+
+
 def reset_acl():
     def post(url, token, parsed, conn):
         conn.request('POST', parsed.path, '', {
@@ -625,4 +664,66 @@ def requires_acls(f):
         finally:
             reset_acl()
         return rv
+    return wrapper
+
+
+class FunctionalStoragePolicyCollection(object):
+
+    def __init__(self, policies):
+        self._all = policies
+        self.default = None
+        for p in self:
+            if p.get('default', False):
+                assert self.default is None, 'Found multiple default ' \
+                    'policies %r and %r' % (self.default, p)
+                self.default = p
+
+    @classmethod
+    def from_info(cls, info=None):
+        if not (info or cluster_info):
+            get_cluster_info()
+        info = info or cluster_info
+        try:
+            policy_info = info['swift']['policies']
+        except KeyError:
+            raise AssertionError('Did not find any policy info in %r' % info)
+        policies = cls(policy_info)
+        assert policies.default, \
+            'Did not find default policy in %r' % policy_info
+        return policies
+
+    def __len__(self):
+        return len(self._all)
+
+    def __iter__(self):
+        return iter(self._all)
+
+    def __getitem__(self, index):
+        return self._all[index]
+
+    def filter(self, **kwargs):
+        return self.__class__([p for p in self if all(
+            p.get(k) == v for k, v in kwargs.items())])
+
+    def exclude(self, **kwargs):
+        return self.__class__([p for p in self if all(
+            p.get(k) != v for k, v in kwargs.items())])
+
+    def select(self):
+        return random.choice(self)
+
+
+def requires_policies(f):
+    @functools.wraps(f)
+    def wrapper(self, *args, **kwargs):
+        if skip:
+            raise SkipTest
+        try:
+            self.policies = FunctionalStoragePolicyCollection.from_info()
+        except AssertionError:
+            raise SkipTest("Unable to determine available policies")
+        if len(self.policies) < 2:
+            raise SkipTest("Multiple policies not enabled")
+        return f(self, *args, **kwargs)
+
     return wrapper
