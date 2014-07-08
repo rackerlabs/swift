@@ -1,3 +1,9 @@
+swift (2.0.0.0~rax2) lucid; urgency=medium
+
+  * Emergency db_prealloc fix
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Tue, 08 Jul 2014 15:26:23 +0000
+
 swift (2.0.0.0~rax1) lucid; urgency=medium
 
   * 1feaf6e release notes for Swift 2.0
