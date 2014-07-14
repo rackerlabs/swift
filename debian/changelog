@@ -1,3 +1,42 @@
+swift (2.0.0.0~rax3) lucid; urgency=medium
+
+  * 0753dd3 Handle func tests of swift cluster that hide /info
+  * 7ea30df Update docs to highlight that the auditor chunk size can be set
+  * 7ab2afe added process pid to the end of storage node log lines
+  * 0582db7 This setting should've been set to False back ...
+  * 2f45600 Document the unnecessary method invoking in FakeRing
+  * f6ff06b Use except x as y instead of except x, y
+  * 9150fb3 Adjust timeout value in test_client_timeout
+  * bfa9139 Fix potential missing key error in container_info
+  * 7dbf832 Fix pop_queue for move object twice
+  * fb5a0f2 Fix KeyError on Storage Policy Container Sync
+  * 0800668 Fix potential missing key error in container_info
+  * b823e16 Fix exception raising in FakeConn
+  * 620ff9b Fix order dependent test in proxy.test_server
+  * 8a3b651 Fix pop_queue for move object twice
+  * 7fcbbeb SimpleClient http proxying
+  * 5d7c8ca Fix the section name in CONTRIBUTING.rst
+  * b724370 Small cleanup to ring serialization
+  * b61fce6 Container Auditor should log a warning if the devices path contains
+  * 0f0c0e5 Fix KeyError on Storage Policy Container Sync
+  * 7904358 Add SAIO fix for Ubuntu 12.04
+  * 0a5b003 Fix double request in simple client
+  * d317888 Parallel object auditor
+  * e21703f Add test for swift-recon --auditor
+  * 2035157 Fix swift-recon --auditor bug
+  * 48d94d9 Don't count 412 or 416 as errors in stats
+  * efe9f62 Fix some spelling in comments
+  * 441a171 Fix issues with test_wsgi.py and Storage Policies
+  * 873c52e Replace POLICY and POLICY_INDEX with string literals
+  * f95706b Minor Updates to Storage Policy Docs
+  * 12b81b2 Fix SLO test with old simplejson
+  * d32169c Change assertCalledWith to assert_called_with
+  * d3b9449 Mock time for audit test 'test_sleeper'
+  * a7b8cb9 Sync netifaces with global-requirements
+  * 5580b09 Add filename*= support to tempurl Content-Disposition
+
+ -- Chuck Thier <chuck.thier@rackspace.com>  Mon, 14 Jul 2014 19:13:02 +0000
+
 swift (2.0.0.0~rax2) lucid; urgency=medium
 
   * Emergency db_prealloc fix
