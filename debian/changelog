@@ -1,3 +1,9 @@
+swift (2.0.0.0~rax4) lucid; urgency=medium
+
+  * 26c2fb9 Reuse a cursor instead of a conn.execute for better performance
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 06 Aug 2014 19:13:02 +0000
+
 swift (2.0.0.0~rax3) lucid; urgency=medium
 
   * 0753dd3 Handle func tests of swift cluster that hide /info
