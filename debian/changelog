@@ -1,3 +1,40 @@
+swift (2.0.0.116~rax1) lucid; urgency=medium
+
+  * 75a329c add the account management config values to swift info
+  * 0abd2cb Shard expiring object container
+  * a0e0014 Sleep for longer at a time in lock_path.
+  * 1bc4fe8 Catch permissions errors when writing StatsD packets
+  * 41d8513 Add timestamp checking in AccountBroker.is_status_deleted
+  * 048d46e fix to handle object-expiration headers in one method
+  * d8b3e16 Update tempurl docstring with methods config option
+  * 134e864 Add POST and DELETE to tempurl default methods
+  * 26c2fb9 Reuse a cursor instead of a conn.execute for better performance
+  * fb22363 Remove old DLO config remenents from proxy
+  * 090baa1 Swift configuration parameter audit
+  * 2b55709 Make swift-form-signature output a sample form
+  * b7254b2 Update the swift documentation theme
+  * 0cefaaf Bail out a little faster when object write affinity is off
+  * 3e04606 Add a env var to use in-memory obj server in func
+  * e2255fc fix expirer bug with unicode container listings
+  * 4286f36 Enable object system metadata on PUTs
+  * 8ad37b2 Fix swift-dispersion-populate bug when using SimpleClient class
+  * 5a84b1c Put proxy-logging in object expirer's sample config
+  * 4bc600f Fix "Handoff requested (N)" log spam
+  * 4f2bb9f Make swift-form-signature testable
+  * 6aff48c Fix trivial typos
+  * 665c953 Update doc for list_endpoints v2 API
+  * ee14d58 Use auth_token from keystonemiddleware
+  * f918bd4 Remove duplicate conditional statement
+  * 05121f5 typo tradeoff -> trade-off
+  * 02aaabb Fix a couple small things in formpost doc string
+  * b908a65 lock_file race fixes
+  * 90272a0 Add X-Delete-At/After support to FormPost
+  * 116ac45 Fix small typo in deployment guide
+  * e1fb64a Pass disk usage options when using --all
+  * 216aaab Add v2 API to list endpoints middleware
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 20 Aug 2014 19:13:02 +0000
+
 swift (2.0.0.0~rax11) lucid; urgency=medium
 
   * 26c2fb9 Reuse a cursor instead of a conn.execute for better performance
