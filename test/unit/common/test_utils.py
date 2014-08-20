@@ -110,10 +110,14 @@ class MockOs(object):
 
 
 class MockUdpSocket(object):
-    def __init__(self):
+    def __init__(self, sendto_errno=None):
         self.sent = []
+        self.sendto_errno = sendto_errno
 
     def sendto(self, data, target):
+        if self.sendto_errno:
+            raise socket.error(self.sendto_errno,
+                               'test errno %s' % self.sendto_errno)
         self.sent.append((data, target))
 
     def close(self):
@@ -726,6 +730,30 @@ class TestUtils(unittest.TestCase):
                 self.assertTrue(not success)
         finally:
             shutil.rmtree(tmpdir)
+
+    def test_lock_path_num_sleeps(self):
+        tmpdir = mkdtemp()
+        num_short_calls = [0]
+        exception_raised = [False]
+
+        def my_sleep(to_sleep):
+            if to_sleep == 0.01:
+                num_short_calls[0] += 1
+            else:
+                raise Exception('sleep time changed: %s' % to_sleep)
+
+        try:
+            with mock.patch('swift.common.utils.sleep', my_sleep):
+                with utils.lock_path(tmpdir):
+                    with utils.lock_path(tmpdir):
+                        pass
+        except Exception as e:
+            exception_raised[0] = True
+            self.assertTrue('sleep time changed' in str(e))
+        finally:
+            shutil.rmtree(tmpdir)
+        self.assertEqual(num_short_calls[0], 11)
+        self.assertTrue(exception_raised[0])
 
     def test_lock_path_class(self):
         tmpdir = mkdtemp()
@@ -2351,6 +2379,77 @@ cluster_dfw1 = http://dfw1.host/v1/
 
             self.assertRaises(OSError, os.remove, nt.name)
 
+    def test_lock_file_unlinked_after_open(self):
+        os_open = os.open
+        first_pass = [True]
+
+        def deleting_open(filename, flags):
+            # unlink the file after it's opened.  once.
+            fd = os_open(filename, flags)
+            if first_pass[0]:
+                os.unlink(filename)
+                first_pass[0] = False
+            return fd
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.open', deleting_open):
+                with utils.lock_file(nt.name, unlink=True) as f:
+                    self.assertNotEqual(os.fstat(nt.fileno()).st_ino,
+                                        os.fstat(f.fileno()).st_ino)
+        first_pass = [True]
+
+        def recreating_open(filename, flags):
+            # unlink and recreate the file after it's opened
+            fd = os_open(filename, flags)
+            if first_pass[0]:
+                os.unlink(filename)
+                os.close(os_open(filename, os.O_CREAT | os.O_RDWR))
+                first_pass[0] = False
+            return fd
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.open', recreating_open):
+                with utils.lock_file(nt.name, unlink=True) as f:
+                    self.assertNotEqual(os.fstat(nt.fileno()).st_ino,
+                                        os.fstat(f.fileno()).st_ino)
+
+    def test_lock_file_held_on_unlink(self):
+        os_unlink = os.unlink
+
+        def flocking_unlink(filename):
+            # make sure the lock is held when we unlink
+            fd = os.open(filename, os.O_RDWR)
+            self.assertRaises(
+                IOError, fcntl.flock, fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.close(fd)
+            os_unlink(filename)
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.unlink', flocking_unlink):
+                with utils.lock_file(nt.name, unlink=True):
+                    pass
+
+    def test_lock_file_no_unlink_if_fail(self):
+        os_open = os.open
+        with NamedTemporaryFile(delete=True) as nt:
+
+            def lock_on_open(filename, flags):
+                # lock the file on another fd after it's opened.
+                fd = os_open(filename, flags)
+                fd2 = os_open(filename, flags)
+                fcntl.flock(fd2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+
+            try:
+                timedout = False
+                with mock.patch('os.open', lock_on_open):
+                    with utils.lock_file(nt.name, unlink=False, timeout=0.01):
+                        pass
+            except LockTimeout:
+                timedout = True
+            self.assert_(timedout)
+            self.assert_(os.path.exists(nt.name))
+
     def test_ismount_path_does_not_exist(self):
         tmpdir = mkdtemp()
         try:
@@ -2965,6 +3064,18 @@ class TestStatsdLogging(unittest.TestCase):
                          0.75)
         self.assertEqual(logger.logger.statsd_client._sample_rate_factor,
                          0.81)
+
+    def test_no_exception_when_cant_send_udp_packet(self):
+        logger = utils.get_logger({'log_statsd_host': 'some.host.com'})
+        statsd_client = logger.logger.statsd_client
+        fl = FakeLogger()
+        statsd_client.logger = fl
+        mock_socket = MockUdpSocket(sendto_errno=errno.EPERM)
+        statsd_client._open_socket = lambda *_: mock_socket
+        logger.increment('tunafish')
+        expected = ["Error sending UDP message to ('some.host.com', 8125): "
+                    "[Errno 1] test errno 1"]
+        self.assertEqual(fl.get_lines_for_level('warning'), expected)
 
     def test_sample_rates(self):
         logger = utils.get_logger({'log_statsd_host': 'some.host.com'})
