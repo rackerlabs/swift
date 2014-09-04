@@ -1,3 +1,17 @@
+swift (2.1.0~rax1) lucid; urgency=medium
+
+  * b5daad5 Combine acc/cont put_* methods and fix their lock problem.
+  * 8e9b16a Only bind SAIO daemons to localhost
+  * 1fcd609 container merge_items speedup
+  * 8d02147 added Alex to AUTHORS
+  * d502404 authors and changelog updates for 2.1.0 release
+  * 6d77c37 Let admins add a region without melting their cluster
+  * 78d0432 Releasing swift 2.0.0.116~rax1
+  * 8fecf49 Respect device weights when adding replicas
+  * 8526a07 Fix sporadic false failure in xprofile unit test code (master)
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 03 Sep 2014 19:13:02 +0000
+
 swift (2.0.0.116~rax1) lucid; urgency=medium
 
   * 75a329c add the account management config values to swift info
