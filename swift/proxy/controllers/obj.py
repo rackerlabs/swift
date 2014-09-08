@@ -271,12 +271,8 @@ class ObjectController(Controller):
             if not containers:
                 return HTTPNotFound(request=req)
 
-            try:
-                req, delete_at_container, delete_at_part, \
-                    delete_at_nodes = self._config_obj_expiration(req)
-            except ValueError as e:
-                return HTTPBadRequest(request=req, content_type='text/plain',
-                                      body=str(e))
+            req, delete_at_container, delete_at_part, \
+                delete_at_nodes = self._config_obj_expiration(req)
 
             # pass the policy index to storage nodes via req header
             policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
@@ -390,17 +386,19 @@ class ObjectController(Controller):
             try:
                 with Timeout(self.app.node_timeout):
                     if conn.resp:
-                        return conn.resp
+                        return (conn, conn.resp)
                     else:
-                        return conn.getresponse()
+                        return (conn, conn.getresponse())
             except (Exception, Timeout):
                 self.app.exception_occurred(
                     conn.node, _('Object'),
                     _('Trying to get final status of PUT to %s') % req.path)
+            return (None, None)
+
         pile = GreenAsyncPile(len(conns))
         for conn in conns:
             pile.spawn(get_conn_response, conn)
-        for response in pile:
+        for (conn, response) in pile:
             if response:
                 statuses.append(response.status)
                 reasons.append(response.reason)
@@ -433,7 +431,8 @@ class ObjectController(Controller):
             try:
                 x_delete_after = int(req.headers['x-delete-after'])
             except ValueError:
-                raise ValueError('Non-integer X-Delete-After')
+                raise HTTPBadRequest(request=req, content_type='text/plain',
+                                     body='Non-integer X-Delete-After')
 
             req.headers['x-delete-at'] = normalize_delete_at_timestamp(
                 time.time() + x_delete_after)
@@ -443,10 +442,12 @@ class ObjectController(Controller):
                 x_delete_at = int(normalize_delete_at_timestamp(
                     int(req.headers['x-delete-at'])))
             except ValueError:
-                raise ValueError('Non-integer X-Delete-At')
+                raise HTTPBadRequest(request=req, content_type='text/plain',
+                                     body='Non-integer X-Delete-At')
 
             if x_delete_at < time.time():
-                raise ValueError('X-Delete-At in past')
+                raise HTTPBadRequest(request=req, content_type='text/plain',
+                                     body='X-Delete-At in past')
 
             req.environ.setdefault('swift.log_info', []).append(
                 'x-delete-at:%s' % x_delete_at)
@@ -659,12 +660,8 @@ class ObjectController(Controller):
 
             req = sink_req
 
-        try:
-            req, delete_at_container, delete_at_part, \
-                delete_at_nodes = self._config_obj_expiration(req)
-        except ValueError as e:
-            return HTTPBadRequest(request=req, content_type='text/plain',
-                                  body=str(e))
+        req, delete_at_container, delete_at_part, \
+            delete_at_nodes = self._config_obj_expiration(req)
 
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition))
