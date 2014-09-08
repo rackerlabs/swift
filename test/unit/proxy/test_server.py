@@ -2608,6 +2608,23 @@ class TestObjectController(unittest.TestCase):
                               (200, 200, 200, 204, 204, 204), 503,
                               raise_exc=True)
 
+    def test_PUT_error_limiting(self):
+        with save_globals():
+            controller = proxy_server.ObjectController(self.app, 'account',
+                                                       'container', 'object')
+            controller.app.sort_nodes = lambda l: l
+            object_ring = controller.app.get_object_ring(None)
+            self.assert_status_map(controller.PUT, (200, 200, 503, 200, 200),
+                                   200)
+
+            # 2, not 1, because assert_status_map() calls the method twice
+            self.assertEquals(object_ring.devs[0].get('errors', 0), 2)
+            self.assertEquals(object_ring.devs[1].get('errors', 0), 0)
+            self.assertEquals(object_ring.devs[2].get('errors', 0), 0)
+            self.assert_('last_error' in object_ring.devs[0])
+            self.assert_('last_error' not in object_ring.devs[1])
+            self.assert_('last_error' not in object_ring.devs[2])
+
     def test_acc_or_con_missing_returns_404(self):
         with save_globals():
             self.app.memcache = FakeMemcacheReturnsNone()
@@ -4126,176 +4143,6 @@ class TestObjectController(unittest.TestCase):
                                   str(int(t + 60)))
             finally:
                 time.time = orig_time
-
-    def test_POST_non_int_delete_after(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            set_http_connect(200, 200, 200, 200, 200, 202, 202, 202)
-            self.app.memcache.store = {}
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Type': 'foo/bar',
-                                         'X-Delete-After': '60.1'})
-            self.app.update_request(req)
-            res = controller.POST(req)
-            self.assertEquals(res.status, '400 Bad Request')
-            self.assertTrue('Non-integer X-Delete-After' in res.body)
-
-    def test_POST_negative_delete_after(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            set_http_connect(200, 200, 200, 200, 200, 202, 202, 202)
-            self.app.memcache.store = {}
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Type': 'foo/bar',
-                                         'X-Delete-After': '-60'})
-            self.app.update_request(req)
-            res = controller.POST(req)
-            self.assertEquals(res.status, '400 Bad Request')
-            self.assertTrue('X-Delete-At in past' in res.body)
-
-    def test_POST_delete_at(self):
-        with save_globals():
-            given_headers = {}
-
-            def fake_make_requests(req, ring, part, method, path, headers,
-                                   query_string=''):
-                given_headers.update(headers[0])
-
-            self.app.object_post_as_copy = False
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            controller.make_requests = fake_make_requests
-            set_http_connect(200, 200)
-            self.app.memcache.store = {}
-            t = str(int(time.time() + 100))
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            controller.POST(req)
-            self.assertEquals(given_headers.get('X-Delete-At'), t)
-            self.assertTrue('X-Delete-At-Host' in given_headers)
-            self.assertTrue('X-Delete-At-Device' in given_headers)
-            self.assertTrue('X-Delete-At-Partition' in given_headers)
-            self.assertTrue('X-Delete-At-Container' in given_headers)
-
-            t = str(int(time.time() + 100)) + '.1'
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            resp = controller.POST(req)
-            self.assertEquals(resp.status_int, 400)
-            self.assertTrue('Non-integer X-Delete-At' in resp.body)
-
-            t = str(int(time.time() - 100))
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            resp = controller.POST(req)
-            self.assertEquals(resp.status_int, 400)
-            self.assertTrue('X-Delete-At in past' in resp.body)
-
-    def test_PUT_converts_delete_after_to_delete_at(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            set_http_connect(200, 200, 201, 201, 201)
-            self.app.memcache.store = {}
-            orig_time = time.time
-            try:
-                t = time.time()
-                time.time = lambda: t
-                req = Request.blank('/v1/a/c/o', {},
-                                    headers={'Content-Length': '0',
-                                             'Content-Type': 'foo/bar',
-                                             'X-Delete-After': '60'})
-                self.app.update_request(req)
-                res = controller.PUT(req)
-                self.assertEquals(res.status, '201 Fake')
-                self.assertEquals(req.headers.get('x-delete-at'),
-                                  str(int(t + 60)))
-            finally:
-                time.time = orig_time
-
-    def test_PUT_non_int_delete_after(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            set_http_connect(200, 200, 201, 201, 201)
-            self.app.memcache.store = {}
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Length': '0',
-                                         'Content-Type': 'foo/bar',
-                                         'X-Delete-After': '60.1'})
-            self.app.update_request(req)
-            res = controller.PUT(req)
-            self.assertEquals(res.status, '400 Bad Request')
-            self.assertTrue('Non-integer X-Delete-After' in res.body)
-
-    def test_PUT_negative_delete_after(self):
-        with save_globals():
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            set_http_connect(200, 200, 201, 201, 201)
-            self.app.memcache.store = {}
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Length': '0',
-                                         'Content-Type': 'foo/bar',
-                                         'X-Delete-After': '-60'})
-            self.app.update_request(req)
-            res = controller.PUT(req)
-            self.assertEquals(res.status, '400 Bad Request')
-            self.assertTrue('X-Delete-At in past' in res.body)
-
-    def test_PUT_delete_at(self):
-        with save_globals():
-            given_headers = {}
-
-            def fake_connect_put_node(nodes, part, path, headers,
-                                      logger_thread_locals):
-                given_headers.update(headers)
-
-            controller = proxy_server.ObjectController(self.app, 'account',
-                                                       'container', 'object')
-            controller._connect_put_node = fake_connect_put_node
-            set_http_connect(200, 200)
-            self.app.memcache.store = {}
-            t = str(int(time.time() + 100))
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Length': '0',
-                                         'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            controller.PUT(req)
-            self.assertEquals(given_headers.get('X-Delete-At'), t)
-            self.assertTrue('X-Delete-At-Host' in given_headers)
-            self.assertTrue('X-Delete-At-Device' in given_headers)
-            self.assertTrue('X-Delete-At-Partition' in given_headers)
-            self.assertTrue('X-Delete-At-Container' in given_headers)
-
-            t = str(int(time.time() + 100)) + '.1'
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Length': '0',
-                                         'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            resp = controller.PUT(req)
-            self.assertEquals(resp.status_int, 400)
-            self.assertTrue('Non-integer X-Delete-At' in resp.body)
-
-            t = str(int(time.time() - 100))
-            req = Request.blank('/v1/a/c/o', {},
-                                headers={'Content-Length': '0',
-                                         'Content-Type': 'foo/bar',
-                                         'X-Delete-At': t})
-            self.app.update_request(req)
-            resp = controller.PUT(req)
-            self.assertEquals(resp.status_int, 400)
-            self.assertTrue('X-Delete-At in past' in resp.body)
 
     @patch_policies([
         StoragePolicy(0, 'zero', False, object_ring=FakeRing()),
