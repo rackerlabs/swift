@@ -1,3 +1,19 @@
+swift (2.1.0~rax2) lucid; urgency=medium
+
+  * 315af17 Error limit the right node on object PUT
+  * 2a8b43e Spelling mistakes corrected in comments.
+  * 1a561e6 warn against sorting requirements
+  * b9ae377 Check for change before container replicator updates db
+  * 33980c7 Fix last_modified_date_to_timestamp on non-UTC systems
+  * 849b21a Combine acc/cont put_* methods and fix their lock problem.
+  * 3a7f80a Small Fix for FakeServerConnection
+  * 5616d98 fix my name in AUTHORS
+  * 21adf82 code shuffle post expired headers refactor
+  * 6978275 Avoid usage of insecure mktemp() function
+  * 7a19298 Setup localization properly
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 08 Sep 2014 19:13:02 +0000
+
 swift (2.1.0~rax1) lucid; urgency=medium
 
   * b5daad5 Combine acc/cont put_* methods and fix their lock problem.
