@@ -1,3 +1,9 @@
+swift (2.1.0~rax3) lucid; urgency=medium
+
+  * 4b6b524 remove dns from requirements
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 09 Sep 2014 19:13:02 +0000
+
 swift (2.1.0~rax2) lucid; urgency=medium
 
   * 315af17 Error limit the right node on object PUT
