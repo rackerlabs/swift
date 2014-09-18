@@ -1,3 +1,9 @@
+swift (2.1.0~rax4) lucid; urgency=medium
+
+  * 43150a7 hotfix container replication
+
+ -- Michael Barton <michael.barton@rackspace.com>  Thu, 18 Sep 2014 19:13:02 +0000
+
 swift (2.1.0~rax3) lucid; urgency=medium
 
   * 4b6b524 remove dns from requirements
