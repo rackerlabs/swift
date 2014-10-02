@@ -88,6 +88,7 @@ _libc_socket = None
 _libc_bind = None
 _libc_accept = None
 _libc_splice = None
+_libc_sendfile = None
 _libc_tee = None
 
 DISABLE_FSYNC = False
@@ -3291,3 +3292,46 @@ def system_has_splice():
         return True
     except AttributeError:
         return False
+
+
+def sendfile(out_fd, in_fd, offset, count):
+    """
+    Calls sendfile - a syscall that copies data from a regular file to a
+    socket.  Currently only Linux's sendfile is supported.  Way to stay with
+    the times, posix.
+
+    :param out_fd: output file descriptor, should be a socket.
+    :param in_fd: input file descriptor, should be a regular file.
+    :param offset: offset in in_fd to send from
+    :param count: number of bytes to send
+    :returns: bytes sent
+    :raises: IOError on failure
+    """
+    global _libc_sendfile
+    if _libc_sendfile is None and not system_has_sendfile():
+        raise Exception("Unable to use sendfile.")
+    ret = _libc_sendfile(out_fd, in_fd, ctypes.c_uint64(offset), count)
+    if ret < 0:
+        err = ctypes.get_errno()
+        raise IOError(err, "sendfile() failed: %s" % os.strerror(err))
+    return ret
+
+
+def system_has_sendfile():
+    """
+    Tests for platform support and the existence of sendfile in libc.
+    """
+    global _libc_sendfile
+    if _libc_sendfile is not None:
+        return True
+    try:
+        if sys.platform == "linux2":
+            _libc_sendfile = load_libc_function('sendfile',
+                                                fail_if_missing=True)
+            _libc_sendfile.argtypes = (ctypes.c_int, ctypes.c_int,
+                                       ctypes.POINTER(ctypes.c_uint64),
+                                       ctypes.c_size_t)
+            return True
+    except AttributeError:
+        pass
+    return False

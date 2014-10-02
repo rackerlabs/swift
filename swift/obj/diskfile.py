@@ -57,7 +57,7 @@ from swift.common.utils import mkdirs, Timestamp, \
     fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
     get_md5_socket, system_has_splice, splice, tee, SPLICE_F_MORE, \
-    F_SETPIPE_SZ
+    F_SETPIPE_SZ, sendfile, system_has_sendfile
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
     DiskFileDeleted, DiskFileError, DiskFileNotOpen, PathNotDir, \
@@ -82,6 +82,10 @@ get_data_dir = partial(get_policy_string, DATADIR_BASE)
 get_async_dir = partial(get_policy_string, ASYNCDIR_BASE)
 get_tmp_dir = partial(get_policy_string, TMP_BASE)
 MD5_OF_EMPTY_STRING = 'd41d8cd98f00b204e9800998ecf8427e'
+
+SEND_MODE_NORMAL = 0
+SEND_MODE_SPLICE = 1
+SEND_MODE_SENDFILE = 2
 
 
 def read_metadata(fd):
@@ -505,7 +509,7 @@ class DiskFileManager(object):
         self.threadpools = defaultdict(
             lambda: ThreadPool(nthreads=threads_per_disk))
 
-        self.use_splice = False
+        self.send_mode = SEND_MODE_NORMAL
         self.pipe_size = None
 
         splice_available = system_has_splice()
@@ -531,10 +535,16 @@ class DiskFileManager(object):
                 self.logger.warn("MD5 sockets not supported. "
                                  "splice() will not be used.")
             else:
-                self.use_splice = True
+                self.send_mode = SEND_MODE_SPLICE
                 with open('/proc/sys/fs/pipe-max-size') as f:
                     max_pipe_size = int(f.read())
                 self.pipe_size = min(max_pipe_size, self.disk_chunk_size)
+        elif config_true_value(conf.get('sendfile', 'no')):
+            if system_has_sendfile():
+                self.send_mode = SEND_MODE_SENDFILE
+            else:
+                self.logger.warn("Use of sendfile requested, but the system"
+                                 " does not support it. ")
 
     def construct_dev_path(self, device):
         """
@@ -603,7 +613,7 @@ class DiskFileManager(object):
         return DiskFile(self, dev_path, self.threadpools[device],
                         partition, account, container, obj,
                         policy_idx=policy_idx,
-                        use_splice=self.use_splice, pipe_size=self.pipe_size,
+                        send_mode=self.send_mode, pipe_size=self.pipe_size,
                         **kwargs)
 
     def object_audit_location_generator(self, device_dirs=None):
@@ -870,13 +880,14 @@ class DiskFileReader(object):
     :param device_path: on-disk device path, used when quarantining an obj
     :param logger: logger caller wants this object to use
     :param quarantine_hook: 1-arg callable called w/reason when quarantined
-    :param use_splice: if true, use zero-copy splice() to send data
+    :param send_mode: integer, one of SEND_MODE_NORMAL, *_SPLICE, or *_SENDFILE
     :param pipe_size: size of pipe buffer used in zero-copy operations
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
     def __init__(self, fp, data_file, obj_size, etag, threadpool,
                  disk_chunk_size, keep_cache_size, device_path, logger,
-                 quarantine_hook, use_splice, pipe_size, keep_cache=False):
+                 quarantine_hook, send_mode, pipe_size,
+                 keep_cache=False):
         # Parameter tracking
         self._fp = fp
         self._data_file = data_file
@@ -887,7 +898,7 @@ class DiskFileReader(object):
         self._device_path = device_path
         self._logger = logger
         self._quarantine_hook = quarantine_hook
-        self._use_splice = use_splice
+        self._send_mode = send_mode
         self._pipe_size = pipe_size
         if keep_cache:
             # Caller suggests we keep this in cache, only do it if the
@@ -937,7 +948,31 @@ class DiskFileReader(object):
                 self.close()
 
     def can_zero_copy_send(self):
-        return self._use_splice
+        return self._send_mode in (SEND_MODE_SPLICE, SEND_MODE_SENDFILE)
+
+    def sendfile_send(self, wsockfd):
+        """
+        Sends a file over the socket using sendfile, which moves data without
+        copying to userspace.
+
+        :param wsockfd: file descriptor (integer) of the socket out which to
+                        send data
+        """
+        rfd = self._fp.fileno()
+        file_size = os.fstat(rfd).st_size
+        self._bytes_read = 0
+        drop_offset = 0
+        while self._bytes_read < file_size:
+            trampoline(wsockfd, write=True)
+            chunk_size = self._threadpool.run_in_thread(
+                sendfile, wsockfd, rfd, self._bytes_read,
+                self._disk_chunk_size)
+            self._bytes_read += chunk_size
+            if (self._bytes_read - drop_offset) > DROP_CACHE_WINDOW:
+                self._drop_cache(rfd, drop_offset,
+                                 self._bytes_read - drop_offset)
+                drop_offset = self._bytes_read
+        self._md5_of_sent_bytes = None
 
     def zero_copy_send(self, wsockfd):
         """
@@ -950,6 +985,9 @@ class DiskFileReader(object):
         # Note: if we ever add support for zero-copy ranged GET responses,
         # we'll have to make this conditional.
         self._started_at_0 = True
+
+        if self._send_mode == SEND_MODE_SENDFILE:
+            return self.sendfile_send(wsockfd)
 
         rfd = self._fp.fileno()
         client_rpipe, client_wpipe = os.pipe()
@@ -1149,20 +1187,20 @@ class DiskFile(object):
     :param obj: object name for the object
     :param _datadir: override the full datadir otherwise constructed here
     :param policy_idx: used to get the data dir when constructing it here
-    :param use_splice: if true, use zero-copy splice() to send data
+    :param send_mode: integer, one of SEND_MODE_NORMAL, *_SPLICE, or *_SENDFILE
     :param pipe_size: size of pipe buffer used in zero-copy operations
     """
 
     def __init__(self, mgr, device_path, threadpool, partition,
                  account=None, container=None, obj=None, _datadir=None,
-                 policy_idx=0, use_splice=False, pipe_size=None):
+                 policy_idx=0, send_mode=SEND_MODE_NORMAL, pipe_size=None):
         self._mgr = mgr
         self._device_path = device_path
         self._threadpool = threadpool or ThreadPool(nthreads=0)
         self._logger = mgr.logger
         self._disk_chunk_size = mgr.disk_chunk_size
         self._bytes_per_sync = mgr.bytes_per_sync
-        self._use_splice = use_splice
+        self._send_mode = send_mode
         self._pipe_size = pipe_size
         if account and container and obj:
             self._name = '/' + '/'.join((account, container, obj))
@@ -1532,7 +1570,7 @@ class DiskFile(object):
             self._fp, self._data_file, int(self._metadata['Content-Length']),
             self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
             self._mgr.keep_cache_size, self._device_path, self._logger,
-            use_splice=self._use_splice, quarantine_hook=_quarantine_hook,
+            send_mode=self._send_mode, quarantine_hook=_quarantine_hook,
             pipe_size=self._pipe_size, keep_cache=keep_cache)
         # At this point the reader object is now responsible for closing
         # the file pointer.

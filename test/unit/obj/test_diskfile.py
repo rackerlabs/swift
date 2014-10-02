@@ -962,7 +962,7 @@ class TestDiskFileManager(unittest.TestCase):
         warnings = logger.get_lines_for_level('warning')
         self.assertTrue(len(warnings) > 0)
         self.assertTrue('splice()' in warnings[-1])
-        self.assertFalse(mgr.use_splice)
+        self.assertEqual(mgr.send_mode, diskfile.SEND_MODE_NORMAL)
 
 
 @patch_policies
@@ -2239,6 +2239,25 @@ class TestDiskFile(unittest.TestCase):
 
             log_lines = self.df_mgr.logger.get_lines_for_level('warning')
             self.assert_('MD5 sockets' in log_lines[-1])
+
+    @mock.patch('swift.obj.diskfile.trampoline', return_value=None)
+    @mock.patch('swift.obj.diskfile.system_has_sendfile', return_value=True)
+    def test_sendfile_send(self, *args):
+        self.conf['sendfile'] = 'on'
+        self.conf['splice'] = 'off'
+        sendfile_args = []
+
+        def mock_sendfile(*args):
+            if not sendfile_args:
+                sendfile_args[:] = args
+            return args[3]
+
+        with mock.patch('swift.obj.diskfile.sendfile', mock_sendfile):
+            df = self._get_open_disk_file(fsize=128)
+            df.reader().zero_copy_send(77)
+            self.assertEqual(sendfile_args[0], 77)
+            self.assertEqual(sendfile_args[2], 0)
+            self.assertEqual(sendfile_args[3], df._disk_chunk_size)
 
 
 if __name__ == '__main__':

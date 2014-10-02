@@ -135,6 +135,12 @@ use = egg:swift#object
 # logs at startup, but your object servers should continue to function.
 #
 # splice = no
+#
+# Use sendfile() for zero-copy object GETs.  This is the fastest method for
+# serving GET requests, but it doesn't support auditing object contents inline
+# with the request, which can catch various forms of bitrot.
+#
+# sendfile = no
 
 [filter:healthcheck]
 use = egg:swift#healthcheck
