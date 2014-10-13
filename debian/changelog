@@ -1,3 +1,66 @@
+swift (2.2.0~rax1) lucid; urgency=medium
+
+  * d9bfa06 Fix rebalance crash post-2.1.0 upgrade.
+  * dec9448 swift-drive-audit: pass logger to get_errors
+  * 772eace Fix unit tests failing in some cases
+  * 6d52063 Add a reference to the OpenStack security guide
+  * c207c9b Refer multi node install to docs.openstack.org
+  * 7528f2b Fix minor typo
+  * 94fd95b Imported Translations from Transifex
+  * d6a8277 updated AUTHORS and CHANGELOG for 2.2.0
+  * 5b2c27a Fix metadata overall limits bug
+  * 301a96f Ensure sys.exit called in fork_child after exception
+  * 6d49cc3 Fix ring-builder crash.
+  * 702d88b fix a comment
+  * 64aa806 Some statements are evaluated twice in the setUp of the TestObjectReplicator
+  * 20e9ad5 Limit partition movement when adding a new tier
+  * 2ce6341 Fix up the return value of launch()
+  * e2285e4 Imported Translations from Transifex
+  * 041cf67 Incorrect variable name in the diskfile.py
+  * 0f93fff Fixes unit tests to clean up temporary directories
+  * 38ba579 Provides proper error handling on builder unpickle
+  * e567722 updated hacking rules
+  * 781a162 use get_container_info in ratelimit
+  * cb20763 Add new features to swift-drive-audit
+  * 15fbf9f Add container_count to policy_stat table
+  * 23c2d95 Remove unused option from ObjectReplicator.__init__
+  * d10462e Fix profile tests to clean up its tempdirs.
+  * b68258a Added instructions to create a label or UUID to the XFS volume and mount using
+  * 4d23a0f Reject overly-taxing ranged-GET requests
+  * 6354e2d direct_client not passing args between some functions
+  * 5efdab6 Imported Translations from Transifex
+  * 4faf170 Add "--no-overlap" option to swift-dispersion populate
+  * c1f6569 Fixes several typos (Swift)
+  * 1678083 Test for unicode names in AccountBroker.merge_items()
+  * 7d0e5eb Zero-copy object-server GET responses with splice()
+  * eaab4d3 container.merge_items bug
+  * 554f2c9 hotfix unicode container merge problem
+  * 09bdc87 Return correct number of changed partitions
+  * a7604da Move multipart MIME parser into utils
+  * c767ec9 Let eventlet.wsgi.server log tracebacks when eventlet_debug is enabled
+  * fc5cee5 Allow filtering by region in swift-recon
+  * 49fa5b8 Update documentation for using keystone auth
+  * 423ac74 Fix internal link to keystoneauth in documentation
+  * 6454842 Stop using intersphinx
+  * 5c98351 Fix RingBuilder._build_max_replicas_by_tier docstring
+  * a03732e Add comments to clarify change to www-authenticate test
+  * ab96796 Fix broken www-authenticate functional test
+  * f4d3fac Treat 404s as 204 on object delete in proxy
+  * 4b6b524 remove dns from requirements
+  * eff9ab7 Delete expired objects in slightly smarter way.
+  * efdc27c Fix directory value for compile_catalog
+  * d2a94bd Fix FormPOST max_file_size exceeded bug.
+  * fa23202 Fixed Typo - dictonary to dictionary
+  * cb55e89 test tempurl header sanitization priority
+  * 88d1d53 Too many if clauses in the _clean_incoming_headers and the _clean_outgoing_head
+  * b7281cf make the bind_port config setting required
+  * 4dc718e Extra unit tests for check_delete_headers
+  * 1226867 Mention storage backends in Associated Projects
+  * 9dcf15f moving object validation checks to top of PUT method
+  * 0221f1f Pay attention to all punctual nodes
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon, 13 Oct 2014 19:13:02 +0000
+
 swift (2.1.0~rax4) lucid; urgency=medium
 
   * 43150a7 hotfix container replication
