@@ -1,6 +1,6 @@
 [DEFAULT]
 # bind_ip = 0.0.0.0
-# bind_port = 6002
+bind_port = 6002
 # bind_timeout = 30
 # backlog = 4096
 # user = swift
@@ -158,7 +158,7 @@ use = egg:swift#recon
 # requested by delay_reaping.
 # reap_warn_after = 2592000
 
-# Note: Put it at the beginning of the pipleline to profile all middleware. But
+# Note: Put it at the beginning of the pipeline to profile all middleware. But
 # it is safer to put this after healthcheck.
 [filter:xprofile]
 use = egg:swift#xprofile
