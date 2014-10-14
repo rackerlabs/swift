@@ -1,3 +1,11 @@
+swift (2.2.0~rax3) lucid; urgency=medium
+
+  * 61de3ab Some assignment statements are redundant
+  * d9bfa06 Fix rebalance crash post-2.1.0 upgrade.
+  * 7c1c8c0 Ssync does not replicate custom object headers
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 14 Oct 2014 19:15:02 +0000
+
 swift (2.2.0~rax2) lucid; urgency=medium
 
   * f3a7f76 sendfile for GETs
