@@ -1,3 +1,10 @@
+swift (2.2.0-1rax3) lucid; urgency=medium
+
+  * This is the same code as in 2.2.0~rax3 version 
+  * Just updated the formatting style for the changelog versioning
+
+ -- Marcelo Martins <marcelo.martins@rackspace.com>  Fri, 07 Nov 2014 14:15:02 +0000
+
 swift (2.2.0~rax3) lucid; urgency=medium
 
   * 61de3ab Some assignment statements are redundant
