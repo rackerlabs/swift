@@ -134,7 +134,6 @@ class Application(object):
             if a.strip()]
         self.strict_cors_mode = config_true_value(
             conf.get('strict_cors_mode', 't'))
-        self.log_coors = config_true_value(conf.get('log_coors', 'f'))
         self.node_timings = {}
         self.timing_expiry = int(conf.get('timing_expiry', 300))
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()

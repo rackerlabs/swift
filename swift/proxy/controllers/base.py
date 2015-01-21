@@ -255,7 +255,7 @@ def cors_validation(func):
                 else:
                     resp.headers['Access-Control-Allow-Origin'] = req_origin
 
-                if controller.app.log_coors and not is_origin_allowed and \
+                if not is_origin_allowed and \
                         'Access-Control-Allow-Origin' in resp.headers:
                     user_agent = \
                         quote(req.headers.get('User-Agent', 'NONE'))[:60]
