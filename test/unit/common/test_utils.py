@@ -4347,51 +4347,5 @@ class TestPairs(unittest.TestCase):
                               (50, 60)]))
 
 
-class TestSendfileSupport(unittest.TestCase):
-
-    def test_sendfile(self):
-        def mock_sendfile(out_fd, in_fd, offset, count):
-            return count
-        with patch('swift.common.utils._libc_sendfile', mock_sendfile):
-            self.assertEqual(utils.sendfile(1, 2, 3, 4), 4)
-
-    @patch('swift.common.utils._libc_sendfile', return_value=-1)
-    def test_sendfile_error(self, *args):
-        self.assertRaises(IOError, utils.sendfile, 1, 2, 3, 4)
-
-    @patch('swift.common.utils.system_has_sendfile', return_value=False)
-    @patch('swift.common.utils._libc_sendfile', None)
-    def test_sendfile_nosupport(self, *args):
-            self.assertRaises(Exception, utils.sendfile, 1, 2, 3, 4)
-
-    @patch('swift.common.utils._libc_sendfile', True)
-    def test_sendfile_exists(self):
-            self.assert_(utils.system_has_sendfile())
-
-    def test_bad_platform(self):
-        with patch('swift.common.utils._libc_sendfile', None):
-            with patch('sys.platform', "redboOS 1.0"):
-                self.assert_(not utils.system_has_sendfile())
-
-    def test_not_in_libc(self):
-        def mock_load_libc_function(*args, **kwargs):
-            raise AttributeError('whatever')
-        with patch('swift.common.utils._libc_sendfile', None):
-            with patch('swift.common.utils.load_libc_function',
-                       mock_load_libc_function):
-                self.assert_(not utils.system_has_sendfile())
-
-    @patch('swift.common.utils._libc_sendfile', None)
-    @patch('sys.platform', "linux2")
-    def test_has_sendfile_works(self, *args):
-        class MockFunc(object):
-            pass
-        mock_func = MockFunc()
-        with patch('swift.common.utils.load_libc_function',
-                   lambda *args, **kwargs: mock_func):
-            self.assert_(utils.system_has_sendfile())
-            self.assert_(hasattr(mock_func, 'argtypes'))
-
-
 if __name__ == '__main__':
     unittest.main()
