@@ -1,3 +1,87 @@
+swift (2.2.1-1rax1) lucid; urgency=medium
+
+  * 371097e Revert "log when a cors request would break if strict_cors_mode was turned on"
+  * 78ff9c8 Revert "allow to turn on this logging"
+  * 3275efa Revert "sendfile for GETs"
+  * ea951f3 Revert "Add Error Limiting to slow nodes."
+  * 6f21504 Fix missing content length of Response
+  * b434be4 Use TCP_NODELAY on outgoing connections
+  * b558642 Drop redundant index output
+  * c65bc49 Mark the --region as mandatory
+  * 99fa8b3 Removing commented out test in test_db_replicator
+  * 172a9b3 Change black/white-listing to use sysmeta.
+  * 7958729 Test that SLO disallows too small first segment if other segments
+  * 92fd28a Fix a few edges where we lost python 2.6 support
+  * 404ac09 Fix large out of sync out of date containers
+  * bcf26f5 Add notion of overload to swift-ring-builder
+  * 5b99ba1 Substituted object storage paragraph with simple definition
+  * 1880351 Only move too-close-together replicas when they can spread out.
+  * fd8eb6b Add undocumented options to keystoneauth sample config
+  * 60504a9 Fix slo constraint according to the error message
+  * 42c790d Avoid unnecessary unlink() on every successful PUT
+  * 199bf8f Imported Translations from Transifex
+  * 5ca49ca Fix the GET's response code when there is a missing segment in LO
+  * bd4054a Add test coverage for `splice` and `tee` failure scenarios
+  * bf4c78b Add tests for unavailability of `tee` and `splice` in `libc`
+  * 2433077 fix dlo manifest file getting versioned
+  * 1ffe6b3 Adds console logging to swift-drive-audit
+  * bfbf0d1 Remove unneeded condition
+  * c23a66f AUTHORS and CHANGELOG update for 2.2.1 release
+  * f483508 Add tests for metadata on 304 and 412 responses
+  * cc2f0f4 Speed up reading and writing xattrs for object metadata
+  * d742b61 Fix the behavior of swift-ring-builder list_parts before rebalance
+  * a3b1926 Workflow documentation is now in infra-manual
+  * c8ef11d added testing notes to the contributing doc
+  * 233e0ae Fix reclaim on deleted containers
+  * dfd7843 Removing unused method: _remaining_items
+  * d40cebf Clean up empty account and container partitions directories.
+  * 83834eb Raise ValueError for offset on Timestamp over limit
+  * 977d7c1 Fix tempfile bugs from commit 6978275
+  * b0f9575 Splice: Use `operator.or_` instead of a lambda-expression
+  * dec97fc Imported Translations from Transifex
+  * 01f6e86 Add Expected Failure for ssync with sys-meta
+  * c52795e Fix container quota check during cross-account COPY
+  * a8751ae Correct misspelled words
+  * 98de48d Fix typo in apache_deployment doc
+  * a1872b0 Fix 2 typos in admin_guide file
+  * 0dc4b0a Fix typos in overview_large_objects and versioning doc
+  * 7a0c4d2 Remove invalid connection checking in db_replicator
+  * 1c9bc0b Handle os.listdir failures in object-updater
+  * 8cc075a mock out os.listdir to return a list
+  * fb353e1 update AUTHORS
+  * 6c02adc Imported Translations from Transifex
+  * 87d8626 fix example typo
+  * 2a0a8ae Rework `splice` and `tee`
+  * ddf8b05 Fix translation setup
+  * e0307f9 Always use FakeMemcache for in-process tests
+  * 99d5018 Consistently apply node error limiting rules in proxy
+  * 6f9ca61 Adds v1 API documentation to doc/source/api
+  * 11a72a4 move slo, dlo after tempauth in pipeline
+  * 2792fe8 Show the sum of every policy's amount in /recon/async
+  * c9f8246 Make in process functional tests use sample proxy-server.conf
+  * e429cd8 Make error limits survive a ring reload
+  * b98fe3b Prefer X-Backend-Timestamp for X-Newest
+  * 4664037 Make resetswift customizable via environment
+  * 331b142 Reject object names with Unicode surrogates
+  * fdcd20f added docs on specs workflow to CONTRIBUTING.md
+  * ecc946b Rename Swiftbrowser in associated projects
+  * dff981a Add Swift Browser as an associated project
+  * f9bed74 Return 403 on unauthorized upload when over account quota
+  * cbc52a7 Return verbose message if account quota exceeded
+  * 83030b9 Update admin guide on handling drive failures
+  * 2659888 When a filesystem does't support xattr return a 507
+  * d895cea Handle os.listdir failures in container-updater
+  * 0080337 reject problematic object names
+  * dd3564a Mention Python 2.7 in Getting Started guide
+  * 047215a Update Getting Started requirements versions
+  * f21e025 Change default keystone auth version to 3 in test/sample.conf
+  * 556568b use replication_ip in ssync
+  * a79682f Fix bug with expirer and unicode
+  * bd1ec7f Adjust MAX_FILE_SIZE during test on 32 bit systems
+  * 0a5268c Fix bug in swift-ring-builder list_parts
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 21 Jan 2015 14:15:02 +0000
+
 swift (2.2.0-1rax3) lucid; urgency=medium
 
   * This is the same code as in 2.2.0~rax3 version 
