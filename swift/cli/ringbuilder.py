@@ -14,10 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from array import array
 from errno import EEXIST
 from itertools import islice, izip
-from math import ceil
 from os import mkdir
 from os.path import basename, abspath, dirname, exists, join as pathjoin
 from sys import argv as sys_argv, exit, stderr
@@ -29,7 +27,7 @@ from swift.common.ring import RingBuilder, Ring
 from swift.common.ring.builder import MAX_BALANCE
 from swift.common.utils import lock_parent_directory
 from swift.common.ring.utils import parse_search_value, parse_args, \
-    build_dev_from_opts, parse_builder_ring_filename_args
+    build_dev_from_opts, parse_builder_ring_filename_args, find_parts
 
 MAJOR_VERSION = 1
 MINOR_VERSION = 3
@@ -253,6 +251,7 @@ swift-ring-builder <builder_file>
                                              balance)
         print 'The minimum number of hours before a partition can be ' \
               'reassigned is %s' % builder.min_part_hours
+        print 'The overload factor is %.6f' % builder.overload
         if builder.devs:
             print 'Devices:    id  region  zone      ip address  port  ' \
                   'replication ip  replication port      name ' \
@@ -329,24 +328,21 @@ swift-ring-builder <builder_file> list_parts <search-value> [<search-value>] ..
             print
             print parse_search_value.__doc__.strip()
             exit(EXIT_ERROR)
-        devs = []
-        for arg in argv[3:]:
-            devs.extend(builder.search_devs(parse_search_value(arg)) or [])
-        if not devs:
+
+        if not builder._replica2part2dev:
+            print('Specified builder file \"%s\" is not rebalanced yet. '
+                  'Please rebalance first.' % argv[1])
+            exit(EXIT_ERROR)
+
+        sorted_partition_count = find_parts(builder, argv)
+
+        if not sorted_partition_count:
             print 'No matching devices found'
             exit(EXIT_ERROR)
-        devs = [d['id'] for d in devs]
-        max_replicas = int(ceil(builder.replicas))
-        matches = [array('i') for x in xrange(max_replicas)]
-        for part in xrange(builder.parts):
-            count = len([d for d in builder.get_part_devices(part)
-                         if d['id'] in devs])
-            if count:
-                matches[max_replicas - count].append(part)
+
         print 'Partition   Matches'
-        for index, parts in enumerate(matches):
-            for part in parts:
-                print '%9d   %7d' % (part, max_replicas - index)
+        for partition, count in sorted_partition_count:
+            print '%9d   %7d' % (partition, count)
         exit(EXIT_SUCCESS)
 
     def add():
@@ -362,9 +358,10 @@ swift-ring-builder <builder_file> add
 or
 
 swift-ring-builder <builder_file> add
-    [--region <region>] --zone <zone> --ip <ip> --port <port>
-    --replication-ip <r_ip> --replication-port <r_port>
-    --device <device_name> --meta <meta> --weight <weight>
+    --region <region> --zone <zone> --ip <ip> --port <port>
+    [--replication-ip <r_ip> --replication-port <r_port>]
+    --device <device_name> --weight <weight>
+    [--meta <meta>]
 
     Adds devices to the ring with the given information. No partitions will be
     assigned to the new device until after running 'rebalance'. This is so you
@@ -385,9 +382,9 @@ swift-ring-builder <builder_file> add
                           (dev['id'], dev['ip'], dev['port'], dev['device'])
                     print "The on-disk ring builder is unchanged.\n"
                     exit(EXIT_ERROR)
-            dev_id = builder.add_dev(new_dev)
-            print('Device %s with %s weight got id %s' %
-                  (format_device(new_dev), new_dev['weight'], dev_id))
+            builder.add_dev(new_dev)
+            print('Device %s weight %s' %
+                  (format_device(new_dev), new_dev['weight']))
 
         builder.save(argv[1])
         exit(EXIT_SUCCESS)
@@ -655,7 +652,7 @@ swift-ring-builder <builder_file> rebalance <seed>
         print 'Reassigned %d (%.02f%%) partitions. Balance is now %.02f.' % \
               (parts, 100.0 * parts / builder.parts, balance)
         status = EXIT_SUCCESS
-        if balance > 5:
+        if balance > 5 and balance / 100.0 > builder.overload:
             print '-' * 79
             print 'NOTE: Balance of %.02f indicates you should push this ' % \
                   balance
@@ -795,6 +792,35 @@ swift-ring-builder <builder_file> set_replicas <replicas>
 
         builder.set_replicas(new_replicas)
         print 'The replica count is now %.6f.' % builder.replicas
+        print 'The change will take effect after the next rebalance.'
+        builder.save(argv[1])
+        exit(EXIT_SUCCESS)
+
+    def set_overload():
+        """
+swift-ring-builder <builder_file> set_overload <overload>
+    Changes the overload factor to the given <overload>.
+
+    A rebalance is needed to make the change take effect.
+    """
+        if len(argv) < 4:
+            print Commands.set_overload.__doc__.strip()
+            exit(EXIT_ERROR)
+
+        new_overload = argv[3]
+        try:
+            new_overload = float(new_overload)
+        except ValueError:
+            print Commands.set_overload.__doc__.strip()
+            print "\"%s\" is not a valid number." % new_overload
+            exit(EXIT_ERROR)
+
+        if new_overload < 0:
+            print "Overload must be non-negative."
+            exit(EXIT_ERROR)
+
+        builder.set_overload(new_overload)
+        print 'The overload is now %.6f.' % builder.overload
         print 'The change will take effect after the next rebalance.'
         builder.save(argv[1])
         exit(EXIT_SUCCESS)

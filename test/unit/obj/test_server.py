@@ -18,6 +18,7 @@
 
 import cPickle as pickle
 import datetime
+import errno
 import operator
 import os
 import mock
@@ -46,6 +47,7 @@ from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
     NullLogger, storage_directory, public, replication
 from swift.common import constraints
 from swift.common.swob import Request, HeaderKeyDict
+from swift.common.splice import splice
 from swift.common.storage_policy import POLICIES
 from swift.common.exceptions import DiskFileDeviceUnavailable
 
@@ -726,6 +728,27 @@ class TestObjectController(unittest.TestCase):
                            'X-Object-Meta-1': 'One',
                            'X-Object-Meta-Two': 'Two'})
 
+    def test_PUT_user_metadata_no_xattr(self):
+        timestamp = normalize_timestamp(time())
+        req = Request.blank(
+            '/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': timestamp,
+                     'Content-Type': 'text/plain',
+                     'ETag': 'b114ab7b90d9ccac4bd5d99cc7ebb568',
+                     'X-Object-Meta-1': 'One',
+                     'X-Object-Meta-Two': 'Two'})
+        req.body = 'VERIFY THREE'
+
+        def mock_get_and_setxattr(*args, **kargs):
+            error_num = errno.ENOTSUP if hasattr(errno, 'ENOTSUP') else \
+                errno.EOPNOTSUPP
+            raise IOError(error_num, 'Operation not supported')
+
+        with mock.patch('xattr.getxattr', mock_get_and_setxattr):
+            with mock.patch('xattr.setxattr', mock_get_and_setxattr):
+                resp = req.get_response(self.object_controller)
+                self.assertEquals(resp.status_int, 507)
+
     def test_PUT_client_timeout(self):
         class FakeTimeout(BaseException):
             def __enter__(self):
@@ -1313,7 +1336,8 @@ class TestObjectController(unittest.TestCase):
         req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={
                                 'X-Timestamp': normalize_timestamp(time()),
-                                'Content-Type': 'application/octet-stream',
+                                'X-Object-Meta-Soup': 'gazpacho',
+                                'Content-Type': 'application/fizzbuzz',
                                 'Content-Length': '4'})
         req.body = 'test'
         resp = req.get_response(self.object_controller)
@@ -1330,6 +1354,8 @@ class TestObjectController(unittest.TestCase):
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 304)
         self.assertEquals(resp.etag, etag)
+        self.assertEquals(resp.headers['Content-Type'], 'application/fizzbuzz')
+        self.assertEquals(resp.headers['X-Object-Meta-Soup'], 'gazpacho')
 
         req = Request.blank('/sda1/p/a/c/o2',
                             environ={'REQUEST_METHOD': 'GET'},
@@ -1557,7 +1583,8 @@ class TestObjectController(unittest.TestCase):
         req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={
                                 'X-Timestamp': timestamp,
-                                'Content-Type': 'application/octet-stream',
+                                'X-Object-Meta-Burr': 'ito',
+                                'Content-Type': 'application/cat-picture',
                                 'Content-Length': '4'})
         req.body = 'test'
         resp = req.get_response(self.object_controller)
@@ -1580,6 +1607,9 @@ class TestObjectController(unittest.TestCase):
                             headers={'If-Unmodified-Since': since})
         resp = req.get_response(self.object_controller)
         self.assertEquals(resp.status_int, 412)
+        self.assertEquals(resp.headers['Content-Type'],
+                          'application/cat-picture')
+        self.assertEquals(resp.headers['X-Object-Meta-Burr'], 'ito')
 
         since = \
             strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 9))
@@ -4393,7 +4423,7 @@ class TestZeroCopy(unittest.TestCase):
     """Test the object server's zero-copy functionality"""
 
     def _system_can_zero_copy(self):
-        if not utils.system_has_splice():
+        if not splice.available:
             return False
 
         try:

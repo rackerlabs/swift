@@ -29,6 +29,7 @@ from eventlet.green import socket
 from tempfile import mkdtemp
 from shutil import rmtree
 from test import get_config
+from swift.common import swob
 from swift.common.utils import config_true_value, LogAdapter
 from swift.common.ring import Ring, RingData
 from hashlib import md5
@@ -124,7 +125,8 @@ class PatchPolicies(object):
 
 class FakeRing(Ring):
 
-    def __init__(self, replicas=3, max_more_nodes=0, part_power=0):
+    def __init__(self, replicas=3, max_more_nodes=0, part_power=0,
+                 base_port=1000):
         """
         :param part_power: make part calculation based on the path
 
@@ -132,27 +134,23 @@ class FakeRing(Ring):
         out of ring methods will actually be based on the path - otherwise we
         exercise the real ring code, but ignore the result and return 1.
         """
+        self._base_port = base_port
+        self.max_more_nodes = max_more_nodes
+        self._part_shift = 32 - part_power
         # 9 total nodes (6 more past the initial 3) is the cap, no matter if
         # this is set higher, or R^2 for R replicas
         self.set_replicas(replicas)
-        self.max_more_nodes = max_more_nodes
-        self._part_shift = 32 - part_power
         self._reload()
 
     def _reload(self):
         self._rtime = time.time()
-
-    def clear_errors(self):
-        for dev in self.devs:
-            for key in ('errors', 'last_error'):
-                dev.pop(key, None)
 
     def set_replicas(self, replicas):
         self.replicas = replicas
         self._devs = []
         for x in range(self.replicas):
             ip = '10.0.0.%s' % x
-            port = 1000 + x
+            port = self._base_port + x
             self._devs.append({
                 'ip': ip,
                 'replication_ip': ip,
@@ -176,7 +174,7 @@ class FakeRing(Ring):
         for x in xrange(self.replicas, min(self.replicas + self.max_more_nodes,
                                            self.replicas * self.replicas)):
             yield {'ip': '10.0.0.%s' % x,
-                   'port': 1000 + x,
+                   'port': self._base_port + x,
                    'device': 'sda',
                    'zone': x % 3,
                    'region': x % 2,
@@ -671,20 +669,23 @@ def fake_http_connect(*code_iter, **kwargs):
                 else:
                     etag = '"68b329da9893e34099c7d8ad5cb9c940"'
 
-            headers = {'content-length': len(self.body),
-                       'content-type': 'x-application/test',
-                       'x-timestamp': self.timestamp,
-                       'x-backend-timestamp': self.timestamp,
-                       'last-modified': self.timestamp,
-                       'x-object-meta-test': 'testing',
-                       'x-delete-at': '9876543210',
-                       'etag': etag,
-                       'x-works': 'yes'}
+            headers = swob.HeaderKeyDict({
+                'content-length': len(self.body),
+                'content-type': 'x-application/test',
+                'x-timestamp': self.timestamp,
+                'x-backend-timestamp': self.timestamp,
+                'last-modified': self.timestamp,
+                'x-object-meta-test': 'testing',
+                'x-delete-at': '9876543210',
+                'etag': etag,
+                'x-works': 'yes',
+            })
             if self.status // 100 == 2:
                 headers['x-account-container-count'] = \
                     kwargs.get('count', 12345)
             if not self.timestamp:
-                del headers['x-timestamp']
+                # when timestamp is None, HeaderKeyDict raises KeyError
+                headers.pop('x-timestamp', None)
             try:
                 if container_ts_iter.next() is False:
                     headers['x-container-timestamp'] = '1'
@@ -725,7 +726,7 @@ def fake_http_connect(*code_iter, **kwargs):
                     sleep(value)
 
         def getheader(self, name, default=None):
-            return dict(self.getheaders()).get(name.lower(), default)
+            return swob.HeaderKeyDict(self.getheaders()).get(name, default)
 
     timestamps_iter = iter(kwargs.get('timestamps') or ['1'] * len(code_iter))
     etag_iter = iter(kwargs.get('etags') or [None] * len(code_iter))
@@ -775,7 +776,25 @@ def fake_http_connect(*code_iter, **kwargs):
 
 @contextmanager
 def mocked_http_conn(*args, **kwargs):
+    requests = []
+
+    def capture_requests(ip, port, method, path, headers, qs, ssl):
+        req = {
+            'ip': ip,
+            'port': port,
+            'method': method,
+            'path': path,
+            'headers': headers,
+            'qs': qs,
+            'ssl': ssl,
+        }
+        requests.append(req)
+    kwargs.setdefault('give_connect', capture_requests)
     fake_conn = fake_http_connect(*args, **kwargs)
+    fake_conn.requests = requests
     with mocklib.patch('swift.common.bufferedhttp.http_connect_raw',
                        new=fake_conn):
         yield fake_conn
+        left_over_status = list(fake_conn.code_iter)
+        if left_over_status:
+            raise AssertionError('left over status %r' % left_over_status)

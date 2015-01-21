@@ -1,4 +1,4 @@
-#-*- coding:utf-8 -*-
+# -*- coding:utf-8 -*-
 # Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +25,7 @@ import email
 import tempfile
 import uuid
 import xattr
+import re
 from shutil import rmtree
 from time import time
 from tempfile import mkdtemp
@@ -32,7 +33,7 @@ from hashlib import md5
 from contextlib import closing, nested
 from gzip import GzipFile
 
-from eventlet import tpool
+from eventlet import hubs, timeout, tpool
 from test.unit import (FakeLogger, mock as unit_mock, temptree,
                        patch_policies, debug_logger)
 
@@ -41,10 +42,11 @@ from swift.obj import diskfile
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, Timestamp
 from swift.common import ring
+from swift.common.splice import splice
 from swift.common.exceptions import DiskFileNotExist, DiskFileQuarantined, \
     DiskFileDeviceUnavailable, DiskFileDeleted, DiskFileNotOpen, \
     DiskFileError, ReplicationLockTimeout, PathNotDir, DiskFileCollision, \
-    DiskFileExpired, SwiftException, DiskFileNoSpace
+    DiskFileExpired, SwiftException, DiskFileNoSpace, DiskFileXattrNotSupported
 from swift.common.storage_policy import POLICIES, get_policy_string
 from functools import partial
 
@@ -766,7 +768,7 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
                  ]
             self.assertEqual(locations, expected)
 
-            #now without a logger
+            # now without a logger
             locations = [(loc.path, loc.device, loc.partition)
                          for loc in diskfile.object_audit_location_generator(
                              devices=tmpdir, mount_check=False)]
@@ -954,8 +956,7 @@ class TestDiskFileManager(unittest.TestCase):
 
     def test_missing_splice_warning(self):
         logger = FakeLogger()
-        with mock.patch('swift.obj.diskfile.system_has_splice',
-                        lambda: False):
+        with mock.patch('swift.common.splice.splice._c_splice', None):
             self.conf['splice'] = 'yes'
             mgr = diskfile.DiskFileManager(self.conf, logger)
 
@@ -1058,6 +1059,17 @@ class TestDiskFile(unittest.TestCase):
         df = self._simple_get_diskfile()
         md = df.read_metadata()
         self.assertEqual(md['X-Timestamp'], Timestamp(42).internal)
+
+    def test_read_metadata_no_xattr(self):
+        def mock_getxattr(*args, **kargs):
+            error_num = errno.ENOTSUP if hasattr(errno, 'ENOTSUP') else \
+                errno.EOPNOTSUPP
+            raise IOError(error_num, "Operation not supported")
+
+        with mock.patch('xattr.getxattr', mock_getxattr):
+            self.assertRaises(
+                DiskFileXattrNotSupported,
+                diskfile.read_metadata, 'n/a')
 
     def test_get_metadata_not_opened(self):
         df = self._simple_get_diskfile()
@@ -1617,6 +1629,40 @@ class TestDiskFile(unittest.TestCase):
         self.assertEquals(len(dl), 2)
         exp_name = '%s.meta' % timestamp
         self.assertTrue(exp_name in set(dl))
+
+    def test_write_metadata_no_xattr(self):
+        timestamp = Timestamp(time()).internal
+        metadata = {'X-Timestamp': timestamp, 'X-Object-Meta-test': 'data'}
+
+        def mock_setxattr(*args, **kargs):
+            error_num = errno.ENOTSUP if hasattr(errno, 'ENOTSUP') else \
+                errno.EOPNOTSUPP
+            raise IOError(error_num, "Operation not supported")
+
+        with mock.patch('xattr.setxattr', mock_setxattr):
+            self.assertRaises(
+                DiskFileXattrNotSupported,
+                diskfile.write_metadata, 'n/a', metadata)
+
+    def test_write_metadata_disk_full(self):
+        timestamp = Timestamp(time()).internal
+        metadata = {'X-Timestamp': timestamp, 'X-Object-Meta-test': 'data'}
+
+        def mock_setxattr_ENOSPC(*args, **kargs):
+            raise IOError(errno.ENOSPC, "No space left on device")
+
+        def mock_setxattr_EDQUOT(*args, **kargs):
+            raise IOError(errno.EDQUOT, "Exceeded quota")
+
+        with mock.patch('xattr.setxattr', mock_setxattr_ENOSPC):
+            self.assertRaises(
+                DiskFileNoSpace,
+                diskfile.write_metadata, 'n/a', metadata)
+
+        with mock.patch('xattr.setxattr', mock_setxattr_EDQUOT):
+            self.assertRaises(
+                DiskFileNoSpace,
+                diskfile.write_metadata, 'n/a', metadata)
 
     def test_delete(self):
         df = self._get_open_disk_file()
@@ -2197,7 +2243,7 @@ class TestDiskFile(unittest.TestCase):
         self.assertTrue(exp_name in set(dl))
 
     def _system_can_zero_copy(self):
-        if not utils.system_has_splice():
+        if not splice.available:
             return False
 
         try:
@@ -2240,6 +2286,165 @@ class TestDiskFile(unittest.TestCase):
             log_lines = self.df_mgr.logger.get_lines_for_level('warning')
             self.assert_('MD5 sockets' in log_lines[-1])
 
+    def test_tee_to_md5_pipe_length_mismatch(self):
+        if not self._system_can_zero_copy():
+            raise SkipTest("zero-copy support is missing")
+
+        self.conf['splice'] = 'on'
+
+        df = self._get_open_disk_file(fsize=16385)
+        reader = df.reader()
+        self.assertTrue(reader.can_zero_copy_send())
+
+        with mock.patch('swift.obj.diskfile.tee') as mock_tee:
+            mock_tee.side_effect = lambda _1, _2, _3, cnt: cnt - 1
+
+            with open('/dev/null', 'w') as devnull:
+                exc_re = (r'tee\(\) failed: tried to move \d+ bytes, but only '
+                          'moved -?\d+')
+                try:
+                    reader.zero_copy_send(devnull.fileno())
+                except Exception as e:
+                    self.assertTrue(re.match(exc_re, str(e)))
+                else:
+                    self.fail('Expected Exception was not raised')
+
+    def test_splice_to_wsockfd_blocks(self):
+        if not self._system_can_zero_copy():
+            raise SkipTest("zero-copy support is missing")
+
+        self.conf['splice'] = 'on'
+
+        df = self._get_open_disk_file(fsize=16385)
+        reader = df.reader()
+        self.assertTrue(reader.can_zero_copy_send())
+
+        def _run_test():
+            # Set up mock of `splice`
+            splice_called = [False]  # State hack
+
+            def fake_splice(fd_in, off_in, fd_out, off_out, len_, flags):
+                if fd_out == devnull.fileno() and not splice_called[0]:
+                    splice_called[0] = True
+                    err = errno.EWOULDBLOCK
+                    raise IOError(err, os.strerror(err))
+
+                return splice(fd_in, off_in, fd_out, off_out,
+                              len_, flags)
+
+            mock_splice.side_effect = fake_splice
+
+            # Set up mock of `trampoline`
+            # There are 2 reasons to mock this:
+            #
+            # - We want to ensure it's called with the expected arguments at
+            #   least once
+            # - When called with our write FD (which points to `/dev/null`), we
+            #   can't actually call `trampoline`, because adding such FD to an
+            #   `epoll` handle results in `EPERM`
+            def fake_trampoline(fd, read=None, write=None, timeout=None,
+                                timeout_exc=timeout.Timeout,
+                                mark_as_closed=None):
+                if write and fd == devnull.fileno():
+                    return
+                else:
+                    hubs.trampoline(fd, read=read, write=write,
+                                    timeout=timeout, timeout_exc=timeout_exc,
+                                    mark_as_closed=mark_as_closed)
+
+            mock_trampoline.side_effect = fake_trampoline
+
+            reader.zero_copy_send(devnull.fileno())
+
+            # Assert the end of `zero_copy_send` was reached
+            mock_close.assert_called()
+            # Assert there was at least one call to `trampoline` waiting for
+            # `write` access to the output FD
+            mock_trampoline.assert_any_call(devnull.fileno(), write=True)
+            # Assert at least one call to `splice` with the output FD we expect
+            for call in mock_splice.call_args_list:
+                args = call[0]
+                if args[2] == devnull.fileno():
+                    break
+            else:
+                self.fail('`splice` not called with expected arguments')
+
+        with mock.patch('swift.obj.diskfile.splice') as mock_splice:
+            with mock.patch.object(
+                    reader, 'close', side_effect=reader.close) as mock_close:
+                with open('/dev/null', 'w') as devnull:
+                    with mock.patch('swift.obj.diskfile.trampoline') as \
+                            mock_trampoline:
+                        _run_test()
+
+    def test_create_unlink_cleanup_DiskFileNoSpace(self):
+        # Test cleanup when DiskFileNoSpace() is raised.
+        df = self.df_mgr.get_diskfile(self.existing_device, '0', 'abc', '123',
+                                      'xyz')
+        _m_fallocate = mock.MagicMock(side_effect=OSError(errno.ENOSPC,
+                                      os.strerror(errno.ENOSPC)))
+        _m_unlink = mock.Mock()
+        with mock.patch("swift.obj.diskfile.fallocate", _m_fallocate):
+            with mock.patch("os.unlink", _m_unlink):
+                try:
+                    with df.create(size=100):
+                        pass
+                except DiskFileNoSpace:
+                    pass
+                else:
+                    self.fail("Expected exception DiskFileNoSpace")
+        self.assertTrue(_m_fallocate.called)
+        self.assertTrue(_m_unlink.called)
+        self.assert_(len(self.df_mgr.logger.log_dict['exception']) == 0)
+
+    def test_create_unlink_cleanup_renamer_fails(self):
+        # Test cleanup when renamer fails
+        _m_renamer = mock.MagicMock(side_effect=OSError(errno.ENOENT,
+                                    os.strerror(errno.ENOENT)))
+        _m_unlink = mock.Mock()
+        df = self._simple_get_diskfile()
+        data = '0' * 100
+        metadata = {
+            'ETag': md5(data).hexdigest(),
+            'X-Timestamp': Timestamp(time()).internal,
+            'Content-Length': str(100),
+        }
+        with mock.patch("swift.obj.diskfile.renamer", _m_renamer):
+            with mock.patch("os.unlink", _m_unlink):
+                try:
+                    with df.create(size=100) as writer:
+                        writer.write(data)
+                        writer.put(metadata)
+                except OSError:
+                    pass
+                else:
+                    self.fail("Expected OSError exception")
+        self.assertFalse(writer.put_succeeded)
+        self.assertTrue(_m_renamer.called)
+        self.assertTrue(_m_unlink.called)
+        self.assert_(len(self.df_mgr.logger.log_dict['exception']) == 0)
+
+    def test_create_unlink_cleanup_logging(self):
+        # Test logging of os.unlink() failures.
+        df = self.df_mgr.get_diskfile(self.existing_device, '0', 'abc', '123',
+                                      'xyz')
+        _m_fallocate = mock.MagicMock(side_effect=OSError(errno.ENOSPC,
+                                      os.strerror(errno.ENOSPC)))
+        _m_unlink = mock.MagicMock(side_effect=OSError(errno.ENOENT,
+                                   os.strerror(errno.ENOENT)))
+        with mock.patch("swift.obj.diskfile.fallocate", _m_fallocate):
+            with mock.patch("os.unlink", _m_unlink):
+                try:
+                    with df.create(size=100):
+                        pass
+                except DiskFileNoSpace:
+                    pass
+                else:
+                    self.fail("Expected exception DiskFileNoSpace")
+        self.assertTrue(_m_fallocate.called)
+        self.assertTrue(_m_unlink.called)
+        self.assert_(self.df_mgr.logger.log_dict['exception'][0][0][0].
+                     startswith("Error removing tempfile:"))
 
 if __name__ == '__main__':
     unittest.main()

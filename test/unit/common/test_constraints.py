@@ -416,6 +416,14 @@ class TestConstraints(unittest.TestCase):
                               valid_utf8_str]:
             self.assertTrue(constraints.check_utf8(true_argument))
 
+    def test_check_utf8_non_canonical(self):
+        self.assertFalse(constraints.check_utf8('\xed\xa0\xbc\xed\xbc\xb8'))
+        self.assertFalse(constraints.check_utf8('\xed\xa0\xbd\xed\xb9\x88'))
+
+    def test_check_utf8_lone_surrogates(self):
+        self.assertFalse(constraints.check_utf8('\xed\xa0\xbc'))
+        self.assertFalse(constraints.check_utf8('\xed\xb9\x88'))
+
     def test_validate_bad_meta(self):
         req = Request.blank(
             '/v/a/c/o',

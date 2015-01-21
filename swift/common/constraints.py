@@ -306,7 +306,13 @@ def check_utf8(string):
         if isinstance(string, unicode):
             string.encode('utf-8')
         else:
-            string.decode('UTF-8')
+            decoded = string.decode('UTF-8')
+            if decoded.encode('UTF-8') != string:
+                return False
+            # A UTF-8 string with surrogates in it is invalid.
+            if any(0xD800 <= ord(codepoint) <= 0xDFFF
+                   for codepoint in decoded):
+                return False
         return '\x00' not in string
     # If string is unicode, decode() will raise UnicodeEncodeError
     # So, we should catch both UnicodeDecodeError & UnicodeEncodeError

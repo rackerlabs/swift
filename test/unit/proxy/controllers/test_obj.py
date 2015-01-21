@@ -15,11 +15,13 @@
 # limitations under the License.
 
 import itertools
+import random
 import time
 import unittest
 from contextlib import contextmanager
 
 import mock
+from eventlet import Timeout
 
 import swift
 from swift.common import utils, swob
@@ -28,6 +30,7 @@ from swift.common.storage_policy import StoragePolicy, POLICIES
 
 from test.unit import FakeRing, FakeMemcache, fake_http_connect, \
     debug_logger, patch_policies
+from test.unit.proxy.test_server import node_error_count
 
 
 @contextmanager
@@ -51,6 +54,11 @@ def set_http_connect(*args, **kwargs):
 
 
 class PatchedObjControllerApp(proxy_server.Application):
+    """
+    This patch is just a hook over handle_request to ensure that when
+    get_controller is called the ObjectController class is patched to
+    return a (possibly stubbed) ObjectController class.
+    """
 
     object_controller = proxy_server.ObjectController
 
@@ -154,6 +162,10 @@ class TestObjController(unittest.TestCase):
                     return super(FakeContainerInfoObjController,
                                  controller).container_info(*args, **kwargs)
 
+        # this is taking advantage of the fact that self.app is a
+        # PachedObjControllerApp, so handle_response will route into an
+        # instance of our FakeContainerInfoObjController just by
+        # overriding the class attribute for object_controller
         self.app.object_controller = FakeContainerInfoObjController
 
     def test_PUT_simple(self):
@@ -186,6 +198,59 @@ class TestObjController(unittest.TestCase):
         with set_http_connect():
             resp = req.get_response(self.app)
         self.assertEquals(resp.status_int, 400)
+
+    def test_PUT_connect_exceptions(self):
+        object_ring = self.app.get_object_ring(None)
+        self.app.sort_nodes = lambda n: n  # disable shuffle
+
+        def test_status_map(statuses, expected):
+            self.app._error_limiting = {}
+            req = swob.Request.blank('/v1/a/c/o.jpg', method='PUT',
+                                     body='test body')
+            with set_http_connect(*statuses):
+                resp = req.get_response(self.app)
+            self.assertEqual(resp.status_int, expected)
+
+        base_status = [201] * 3
+        # test happy path
+        test_status_map(list(base_status), 201)
+        for i in range(3):
+            self.assertEqual(node_error_count(
+                self.app, object_ring.devs[i]), 0)
+        # single node errors and test isolation
+        for i in range(3):
+            status_list = list(base_status)
+            status_list[i] = 503
+            test_status_map(status_list, 201)
+            for j in range(3):
+                self.assertEqual(node_error_count(
+                    self.app, object_ring.devs[j]), 1 if j == i else 0)
+        # connect errors
+        test_status_map((201, Timeout(), 201, 201), 201)
+        self.assertEqual(node_error_count(
+            self.app, object_ring.devs[1]), 1)
+        test_status_map((Exception('kaboom!'), 201, 201, 201), 201)
+        self.assertEqual(node_error_count(
+            self.app, object_ring.devs[0]), 1)
+        # expect errors
+        test_status_map((201, 201, (503, None), 201), 201)
+        self.assertEqual(node_error_count(
+            self.app, object_ring.devs[2]), 1)
+        test_status_map(((507, None), 201, 201, 201), 201)
+        self.assertEqual(
+            node_error_count(self.app, object_ring.devs[0]),
+            self.app.error_suppression_limit + 1)
+        # response errors
+        test_status_map(((100, Timeout()), 201, 201), 201)
+        self.assertEqual(
+            node_error_count(self.app, object_ring.devs[0]), 1)
+        test_status_map((201, 201, (100, Exception())), 201)
+        self.assertEqual(
+            node_error_count(self.app, object_ring.devs[2]), 1)
+        test_status_map((201, (100, 507), 201), 201)
+        self.assertEqual(
+            node_error_count(self.app, object_ring.devs[1]),
+            self.app.error_suppression_limit + 1)
 
     def test_GET_simple(self):
         req = swift.common.swob.Request.blank('/v1/a/c/o')
@@ -542,6 +607,75 @@ class TestObjController(unittest.TestCase):
         with set_http_connect(200, 200, 200):
             resp = req.get_response(self.app)
         self.assertEquals(resp.status_int, 200)
+
+    def test_HEAD_x_newest_different_timestamps(self):
+        req = swob.Request.blank('/v1/a/c/o', method='HEAD',
+                                 headers={'X-Newest': 'true'})
+        ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
+        timestamps = [next(ts) for i in range(3)]
+        newest_timestamp = timestamps[-1]
+        random.shuffle(timestamps)
+        backend_response_headers = [{
+            'X-Backend-Timestamp': t.internal,
+            'X-Timestamp': t.normal
+        } for t in timestamps]
+        with set_http_connect(200, 200, 200,
+                              headers=backend_response_headers):
+            resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.headers['x-timestamp'], newest_timestamp.normal)
+
+    def test_HEAD_x_newest_with_two_vector_timestamps(self):
+        req = swob.Request.blank('/v1/a/c/o', method='HEAD',
+                                 headers={'X-Newest': 'true'})
+        ts = (utils.Timestamp(time.time(), offset=offset)
+              for offset in itertools.count())
+        timestamps = [next(ts) for i in range(3)]
+        newest_timestamp = timestamps[-1]
+        random.shuffle(timestamps)
+        backend_response_headers = [{
+            'X-Backend-Timestamp': t.internal,
+            'X-Timestamp': t.normal
+        } for t in timestamps]
+        with set_http_connect(200, 200, 200,
+                              headers=backend_response_headers):
+            resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.headers['x-backend-timestamp'],
+                         newest_timestamp.internal)
+
+    def test_HEAD_x_newest_with_some_missing(self):
+        req = swob.Request.blank('/v1/a/c/o', method='HEAD',
+                                 headers={'X-Newest': 'true'})
+        ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
+        request_count = self.app.request_node_count(self.obj_ring.replicas)
+        backend_response_headers = [{
+            'x-timestamp': next(ts).normal,
+        } for i in range(request_count)]
+        responses = [404] * (request_count - 1)
+        responses.append(200)
+        request_log = []
+
+        def capture_requests(ip, port, device, part, method, path,
+                             headers=None, **kwargs):
+            req = {
+                'ip': ip,
+                'port': port,
+                'device': device,
+                'part': part,
+                'method': method,
+                'path': path,
+                'headers': headers,
+            }
+            request_log.append(req)
+        with set_http_connect(*responses,
+                              headers=backend_response_headers,
+                              give_connect=capture_requests):
+            resp = req.get_response(self.app)
+        self.assertEqual(resp.status_int, 200)
+        for req in request_log:
+            self.assertEqual(req['method'], 'HEAD')
+            self.assertEqual(req['path'], '/a/c/o')
 
     def test_PUT_log_info(self):
         req = swift.common.swob.Request.blank('/v1/a/c/o', method='PUT')

@@ -87,8 +87,6 @@ _posix_fadvise = None
 _libc_socket = None
 _libc_bind = None
 _libc_accept = None
-_libc_splice = None
-_libc_tee = None
 
 DISABLE_FSYNC = False
 
@@ -593,6 +591,7 @@ def drop_buffer_cache(fd, offset, length):
 
 NORMAL_FORMAT = "%016.05f"
 INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
+MAX_OFFSET = (16 ** 16) - 1
 # Setting this to True will cause the internal format to always display
 # extended digits - even when the value is equivalent to the normalized form.
 # This isn't ideal during an upgrade when some servers might not understand
@@ -653,6 +652,8 @@ class Timestamp(object):
             self.offset += offset
         else:
             raise ValueError('offset must be non-negative')
+        if self.offset > MAX_OFFSET:
+            raise ValueError('offset must be smaller than %d' % MAX_OFFSET)
 
     def __repr__(self):
         return INTERNAL_FORMAT % (self.timestamp, self.offset)
@@ -3222,65 +3223,3 @@ def get_md5_socket():
         raise IOError(ctypes.get_errno(), "Failed to accept MD5 socket")
 
     return md5_sockfd
-
-
-# Flags for splice() and tee()
-SPLICE_F_MOVE = 1
-SPLICE_F_NONBLOCK = 2
-SPLICE_F_MORE = 4
-SPLICE_F_GIFT = 8
-
-
-def splice(fd_in, off_in, fd_out, off_out, length, flags):
-    """
-    Calls splice - a Linux-specific syscall for zero-copy data movement.
-
-    On success, returns the number of bytes moved.
-
-    On failure where errno is EWOULDBLOCK, returns None.
-
-    On all other failures, raises IOError.
-    """
-    global _libc_splice
-    if _libc_splice is None:
-        _libc_splice = load_libc_function('splice', fail_if_missing=True)
-
-    ret = _libc_splice(ctypes.c_int(fd_in), ctypes.c_long(off_in),
-                       ctypes.c_int(fd_out), ctypes.c_long(off_out),
-                       ctypes.c_int(length), ctypes.c_int(flags))
-    if ret < 0:
-        err = ctypes.get_errno()
-        if err == errno.EWOULDBLOCK:
-            return None
-        else:
-            raise IOError(err, "splice() failed: %s" % os.strerror(err))
-    return ret
-
-
-def tee(fd_in, fd_out, length, flags):
-    """
-    Calls tee - a Linux-specific syscall to let pipes share data.
-
-    On success, returns the number of bytes "copied".
-
-    On failure, raises IOError.
-    """
-    global _libc_tee
-    if _libc_tee is None:
-        _libc_tee = load_libc_function('tee', fail_if_missing=True)
-
-    ret = _libc_tee(ctypes.c_int(fd_in), ctypes.c_int(fd_out),
-                    ctypes.c_int(length), ctypes.c_int(flags))
-    if ret < 0:
-        err = ctypes.get_errno()
-        raise IOError(err, "tee() failed: %s" % os.strerror(err))
-    return ret
-
-
-def system_has_splice():
-    global _libc_splice
-    try:
-        _libc_splice = load_libc_function('splice', fail_if_missing=True)
-        return True
-    except AttributeError:
-        return False

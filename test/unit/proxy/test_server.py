@@ -280,6 +280,28 @@ def sortHeaderNames(headerNames):
     return ', '.join(headers)
 
 
+def node_error_count(proxy_app, ring_node):
+    # Reach into the proxy's internals to get the error count for a
+    # particular node
+    node_key = proxy_app._error_limit_node_key(ring_node)
+    return proxy_app._error_limiting.get(node_key, {}).get('errors', 0)
+
+
+def node_last_error(proxy_app, ring_node):
+    # Reach into the proxy's internals to get the last error for a
+    # particular node
+    node_key = proxy_app._error_limit_node_key(ring_node)
+    return proxy_app._error_limiting.get(node_key, {}).get('last_error')
+
+
+def set_node_errors(proxy_app, ring_node, value, last_error):
+    # Set the node's error count to value
+    node_key = proxy_app._error_limit_node_key(ring_node)
+    stats = proxy_app._error_limiting.setdefault(node_key, {})
+    stats['errors'] = value
+    stats['last_error'] = last_error
+
+
 class FakeMemcacheReturnsNone(FakeMemcache):
 
     def get(self, key):
@@ -326,6 +348,25 @@ def _make_callback_func(calls):
         context['headers'] = headers or {}
         calls.append(context)
     return callback
+
+
+def _limit_max_file_size(f):
+    """
+    This will limit constraints.MAX_FILE_SIZE for the duration of the
+    wrapped function, based on whether MAX_FILE_SIZE exceeds the
+    sys.maxsize limit on the system running the tests.
+
+    This allows successful testing on 32 bit systems.
+    """
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        test_max_file_size = constraints.MAX_FILE_SIZE
+        if constraints.MAX_FILE_SIZE >= sys.maxsize:
+            test_max_file_size = (2 ** 30 + 2)
+        with mock.patch.object(constraints, 'MAX_FILE_SIZE',
+                               test_max_file_size):
+            return f(*args, **kwargs)
+    return wrapper
 
 
 # tests
@@ -923,20 +964,22 @@ class TestProxyServerLoading(unittest.TestCase):
             self.assert_(policy.object_ring)
 
 
-@patch_policies([StoragePolicy(0, 'zero', True, object_ring=FakeRing())])
+@patch_policies([StoragePolicy(0, 'zero', True,
+                               object_ring=FakeRing(base_port=3000))])
 class TestObjectController(unittest.TestCase):
 
     def setUp(self):
-        self.app = proxy_server.Application(None, FakeMemcache(),
-                                            logger=debug_logger('proxy-ut'),
-                                            account_ring=FakeRing(),
-                                            container_ring=FakeRing())
+        self.app = proxy_server.Application(
+            None, FakeMemcache(),
+            logger=debug_logger('proxy-ut'),
+            account_ring=FakeRing(),
+            container_ring=FakeRing())
 
     def tearDown(self):
         self.app.account_ring.set_replicas(3)
         self.app.container_ring.set_replicas(3)
         for policy in POLICIES:
-            policy.object_ring = FakeRing()
+            policy.object_ring = FakeRing(base_port=3000)
 
     def assert_status_map(self, method, statuses, expected, raise_exc=False):
         with save_globals():
@@ -2007,6 +2050,8 @@ class TestObjectController(unittest.TestCase):
                                                              None, None), None)
             test_status_map((200, 200, 200, 200, 200), 200, ('0', '0', None,
                                                              None, '1'), '1')
+            test_status_map((200, 200, 404, 404, 200), 200, ('0', '0', None,
+                                                             None, '1'), '1')
 
     def test_GET_newest(self):
         with save_globals():
@@ -2493,9 +2538,9 @@ class TestObjectController(unittest.TestCase):
                 self.app.log_handoffs = True
                 self.app.logger = FakeLogger()
                 self.app.request_node_count = lambda r: 7
-                object_ring.clear_errors()
-                object_ring._devs[0]['errors'] = 999
-                object_ring._devs[0]['last_error'] = 2 ** 63 - 1
+                self.app._error_limiting = {}  # clear out errors
+                set_node_errors(self.app, object_ring._devs[0], 999,
+                                last_error=(2 ** 63 - 1))
 
                 collected_nodes = []
                 for node in self.app.iter_nodes(object_ring, partition):
@@ -2510,10 +2555,10 @@ class TestObjectController(unittest.TestCase):
                 self.app.log_handoffs = True
                 self.app.logger = FakeLogger()
                 self.app.request_node_count = lambda r: 7
-                object_ring.clear_errors()
+                self.app._error_limiting = {}  # clear out errors
                 for i in range(2):
-                    object_ring._devs[i]['errors'] = 999
-                    object_ring._devs[i]['last_error'] = 2 ** 63 - 1
+                    set_node_errors(self.app, object_ring._devs[i], 999,
+                                    last_error=(2 ** 63 - 1))
 
                 collected_nodes = []
                 for node in self.app.iter_nodes(object_ring, partition):
@@ -2532,10 +2577,10 @@ class TestObjectController(unittest.TestCase):
                 self.app.logger = FakeLogger()
                 self.app.request_node_count = lambda r: 10
                 object_ring.set_replicas(4)  # otherwise we run out of handoffs
-                object_ring.clear_errors()
+                self.app._error_limiting = {}  # clear out errors
                 for i in range(4):
-                    object_ring._devs[i]['errors'] = 999
-                    object_ring._devs[i]['last_error'] = 2 ** 63 - 1
+                    set_node_errors(self.app, object_ring._devs[i], 999,
+                                    last_error=(2 ** 63 - 1))
 
                 collected_nodes = []
                 for node in self.app.iter_nodes(object_ring, partition):
@@ -2593,7 +2638,8 @@ class TestObjectController(unittest.TestCase):
 
     def test_iter_nodes_with_custom_node_iter(self):
         object_ring = self.app.get_object_ring(None)
-        node_list = [dict(id=n) for n in xrange(10)]
+        node_list = [dict(id=n, ip='1.2.3.4', port=n, device='D')
+                     for n in xrange(10)]
         with nested(
                 mock.patch.object(self.app, 'sort_nodes', lambda n: n),
                 mock.patch.object(self.app, 'request_node_count',
@@ -2674,16 +2720,20 @@ class TestObjectController(unittest.TestCase):
             object_ring = controller.app.get_object_ring(None)
             self.assert_status_map(controller.HEAD, (200, 200, 503, 200, 200),
                                    200)
-            self.assertEquals(object_ring.devs[0]['errors'], 2)
-            self.assert_('last_error' in object_ring.devs[0])
+            self.assertEquals(
+                node_error_count(controller.app, object_ring.devs[0]), 2)
+            self.assert_(node_last_error(controller.app, object_ring.devs[0])
+                         is not None)
             for _junk in xrange(self.app.error_suppression_limit):
                 self.assert_status_map(controller.HEAD, (200, 200, 503, 503,
                                                          503), 503)
-            self.assertEquals(object_ring.devs[0]['errors'],
-                              self.app.error_suppression_limit + 1)
+            self.assertEquals(
+                node_error_count(controller.app, object_ring.devs[0]),
+                self.app.error_suppression_limit + 1)
             self.assert_status_map(controller.HEAD, (200, 200, 200, 200, 200),
                                    503)
-            self.assert_('last_error' in object_ring.devs[0])
+            self.assert_(node_last_error(controller.app, object_ring.devs[0])
+                         is not None)
             self.assert_status_map(controller.PUT, (200, 200, 200, 201, 201,
                                                     201), 503)
             self.assert_status_map(controller.POST,
@@ -2699,6 +2749,34 @@ class TestObjectController(unittest.TestCase):
                               (200, 200, 200, 204, 204, 204), 503,
                               raise_exc=True)
 
+    def test_error_limiting_survives_ring_reload(self):
+        with save_globals():
+            controller = proxy_server.ObjectController(self.app, 'account',
+                                                       'container', 'object')
+            controller.app.sort_nodes = lambda l: l
+            object_ring = controller.app.get_object_ring(None)
+            self.assert_status_map(controller.HEAD, (200, 200, 503, 200, 200),
+                                   200)
+            self.assertEquals(
+                node_error_count(controller.app, object_ring.devs[0]), 2)
+            self.assert_(node_last_error(controller.app, object_ring.devs[0])
+                         is not None)
+            for _junk in xrange(self.app.error_suppression_limit):
+                self.assert_status_map(controller.HEAD, (200, 200, 503, 503,
+                                                         503), 503)
+            self.assertEquals(
+                node_error_count(controller.app, object_ring.devs[0]),
+                self.app.error_suppression_limit + 1)
+
+            # wipe out any state in the ring
+            for policy in POLICIES:
+                policy.object_ring = FakeRing(base_port=3000)
+
+            # and we still get an error, which proves that the
+            # error-limiting info survived a ring reload
+            self.assert_status_map(controller.HEAD, (200, 200, 200, 200, 200),
+                                   503)
+
     def test_PUT_error_limiting(self):
         with save_globals():
             controller = proxy_server.ObjectController(self.app, 'account',
@@ -2710,12 +2788,13 @@ class TestObjectController(unittest.TestCase):
                                    200)
 
             # 2, not 1, because assert_status_map() calls the method twice
-            self.assertEquals(object_ring.devs[0].get('errors', 0), 2)
-            self.assertEquals(object_ring.devs[1].get('errors', 0), 0)
-            self.assertEquals(object_ring.devs[2].get('errors', 0), 0)
-            self.assert_('last_error' in object_ring.devs[0])
-            self.assert_('last_error' not in object_ring.devs[1])
-            self.assert_('last_error' not in object_ring.devs[2])
+            odevs = object_ring.devs
+            self.assertEquals(node_error_count(controller.app, odevs[0]), 2)
+            self.assertEquals(node_error_count(controller.app, odevs[1]), 0)
+            self.assertEquals(node_error_count(controller.app, odevs[2]), 0)
+            self.assert_(node_last_error(controller.app, odevs[0]) is not None)
+            self.assert_(node_last_error(controller.app, odevs[1]) is None)
+            self.assert_(node_last_error(controller.app, odevs[2]) is None)
 
     def test_PUT_error_limiting_last_node(self):
         with save_globals():
@@ -2728,18 +2807,18 @@ class TestObjectController(unittest.TestCase):
                                    200)
 
             # 2, not 1, because assert_status_map() calls the method twice
-            self.assertEquals(object_ring.devs[0].get('errors', 0), 0)
-            self.assertEquals(object_ring.devs[1].get('errors', 0), 0)
-            self.assertEquals(object_ring.devs[2].get('errors', 0), 2)
-            self.assert_('last_error' not in object_ring.devs[0])
-            self.assert_('last_error' not in object_ring.devs[1])
-            self.assert_('last_error' in object_ring.devs[2])
+            odevs = object_ring.devs
+            self.assertEquals(node_error_count(controller.app, odevs[0]), 0)
+            self.assertEquals(node_error_count(controller.app, odevs[1]), 0)
+            self.assertEquals(node_error_count(controller.app, odevs[2]), 2)
+            self.assert_(node_last_error(controller.app, odevs[0]) is None)
+            self.assert_(node_last_error(controller.app, odevs[1]) is None)
+            self.assert_(node_last_error(controller.app, odevs[2]) is not None)
 
     def test_acc_or_con_missing_returns_404(self):
         with save_globals():
             self.app.memcache = FakeMemcacheReturnsNone()
-            self.app.account_ring.clear_errors()
-            self.app.container_ring.clear_errors()
+            self.app._error_limiting = {}
             controller = proxy_server.ObjectController(self.app, 'account',
                                                        'container', 'object')
             set_http_connect(200, 200, 200, 200, 200, 200)
@@ -2806,8 +2885,9 @@ class TestObjectController(unittest.TestCase):
             self.assertEquals(resp.status_int, 404)
 
             for dev in self.app.account_ring.devs:
-                dev['errors'] = self.app.error_suppression_limit + 1
-                dev['last_error'] = time.time()
+                set_node_errors(
+                    self.app, dev, self.app.error_suppression_limit + 1,
+                    time.time())
             set_http_connect(200)
             #                acct [isn't actually called since everything
             #                      is error limited]
@@ -2818,10 +2898,11 @@ class TestObjectController(unittest.TestCase):
             self.assertEquals(resp.status_int, 404)
 
             for dev in self.app.account_ring.devs:
-                dev['errors'] = 0
+                set_node_errors(self.app, dev, 0, last_error=None)
             for dev in self.app.container_ring.devs:
-                dev['errors'] = self.app.error_suppression_limit + 1
-                dev['last_error'] = time.time()
+                set_node_errors(self.app, dev,
+                                self.app.error_suppression_limit + 1,
+                                time.time())
             set_http_connect(200, 200)
             #                acct cont [isn't actually called since
             #                           everything is error limited]
@@ -3286,12 +3367,13 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.headers.get('x-object-meta-ours'), 'okay')
         self.assertEquals(resp.headers.get('x-delete-at'), '9876543210')
 
+    @_limit_max_file_size
     def test_copy_source_larger_than_max_file_size(self):
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={'Content-Length': '0',
                                      'X-Copy-From': '/c/o'})
-
         # copy-from object is too large to fit in target object
+
         class LargeResponseBody(object):
 
             def __len__(self):
@@ -3530,6 +3612,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(resp.headers.get('x-object-meta-ours'), 'okay')
         self.assertEquals(resp.headers.get('x-delete-at'), '9876543210')
 
+    @_limit_max_file_size
     def test_COPY_source_larger_than_max_file_size(self):
         req = Request.blank('/v1/a/c/o',
                             environ={'REQUEST_METHOD': 'COPY'},
@@ -3552,6 +3635,7 @@ class TestObjectController(unittest.TestCase):
             resp = controller.COPY(req)
         self.assertEquals(resp.status_int, 413)
 
+    @_limit_max_file_size
     def test_COPY_account_source_larger_than_max_file_size(self):
         req = Request.blank('/v1/a/c/o',
                             environ={'REQUEST_METHOD': 'COPY'},
@@ -4187,18 +4271,22 @@ class TestObjectController(unittest.TestCase):
         exp = 'HTTP/1.1 404'
         self.assertEquals(headers[:len(exp)], exp)
 
-        # make sure manifest files don't get versioned
-        sock = connect_tcp(('localhost', prolis.getsockname()[1]))
-        fd = sock.makefile()
-        fd.write('PUT /v1/a/%s/%s HTTP/1.1\r\nHost: '
-                 'localhost\r\nConnection: close\r\nX-Storage-Token: '
-                 't\r\nContent-Length: 0\r\nContent-Type: text/jibberish0\r\n'
-                 'Foo: barbaz\r\nX-Object-Manifest: %s/foo_\r\n\r\n'
-                 % (oc, vc, o))
-        fd.flush()
-        headers = readuntil2crlfs(fd)
-        exp = 'HTTP/1.1 201'
-        self.assertEquals(headers[:len(exp)], exp)
+        # make sure dlo manifest files don't get versioned
+        for _junk in xrange(1, versions_to_create):
+            sleep(.01)  # guarantee that the timestamp changes
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            fd = sock.makefile()
+            fd.write('PUT /v1/a/%s/%s HTTP/1.1\r\nHost: '
+                     'localhost\r\nConnection: close\r\nX-Storage-Token: '
+                     't\r\nContent-Length: 0\r\n'
+                     'Content-Type: text/jibberish0\r\n'
+                     'Foo: barbaz\r\nX-Object-Manifest: %s/%s/\r\n\r\n'
+                     % (oc, o, oc, o))
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 201'
+            self.assertEquals(headers[:len(exp)], exp)
+
         # Ensure we have no saved versions
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -5170,18 +5258,19 @@ class TestObjectController(unittest.TestCase):
 
 
 @patch_policies([
-    StoragePolicy(0, 'zero', True, object_ring=FakeRing()),
-    StoragePolicy(1, 'one', False, object_ring=FakeRing()),
-    StoragePolicy(2, 'two', False, True, object_ring=FakeRing())
+    StoragePolicy(0, 'zero', True, object_ring=FakeRing(base_port=3000)),
+    StoragePolicy(1, 'one', False, object_ring=FakeRing(base_port=3000)),
+    StoragePolicy(2, 'two', False, True, object_ring=FakeRing(base_port=3000))
 ])
 class TestContainerController(unittest.TestCase):
     "Test swift.proxy_server.ContainerController"
 
     def setUp(self):
-        self.app = proxy_server.Application(None, FakeMemcache(),
-                                            account_ring=FakeRing(),
-                                            container_ring=FakeRing(),
-                                            logger=debug_logger())
+        self.app = proxy_server.Application(
+            None, FakeMemcache(),
+            account_ring=FakeRing(),
+            container_ring=FakeRing(base_port=2000),
+            logger=debug_logger())
 
     def test_convert_policy_to_index(self):
         controller = swift.proxy.controllers.ContainerController(self.app,
@@ -5598,7 +5687,7 @@ class TestContainerController(unittest.TestCase):
         for meth in ('DELETE', 'PUT'):
             with save_globals():
                 self.app.memcache = FakeMemcacheReturnsNone()
-                self.app.account_ring.clear_errors()
+                self.app._error_limiting = {}
                 controller = proxy_server.ContainerController(self.app,
                                                               'account',
                                                               'container')
@@ -5636,8 +5725,9 @@ class TestContainerController(unittest.TestCase):
                 self.assertEquals(resp.status_int, 404)
 
                 for dev in self.app.account_ring.devs:
-                    dev['errors'] = self.app.error_suppression_limit + 1
-                    dev['last_error'] = time.time()
+                    set_node_errors(self.app, dev,
+                                    self.app.error_suppression_limit + 1,
+                                    time.time())
                 set_http_connect(200, 200, 200, 200, 200, 200)
                 # Make sure it is a blank request wthout env caching
                 req = Request.blank('/v1/a/c',
@@ -5675,19 +5765,26 @@ class TestContainerController(unittest.TestCase):
         with save_globals():
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
+            container_ring = controller.app.container_ring
             controller.app.sort_nodes = lambda l: l
             self.assert_status_map(controller.HEAD, (200, 503, 200, 200), 200,
                                    missing_container=False)
+
             self.assertEquals(
-                controller.app.container_ring.devs[0]['errors'], 2)
-            self.assert_('last_error' in controller.app.container_ring.devs[0])
+                node_error_count(controller.app, container_ring.devs[0]), 2)
+            self.assert_(
+                node_last_error(controller.app, container_ring.devs[0])
+                is not None)
             for _junk in xrange(self.app.error_suppression_limit):
                 self.assert_status_map(controller.HEAD,
                                        (200, 503, 503, 503), 503)
-            self.assertEquals(controller.app.container_ring.devs[0]['errors'],
-                              self.app.error_suppression_limit + 1)
+            self.assertEquals(
+                node_error_count(controller.app, container_ring.devs[0]),
+                self.app.error_suppression_limit + 1)
             self.assert_status_map(controller.HEAD, (200, 200, 200, 200), 503)
-            self.assert_('last_error' in controller.app.container_ring.devs[0])
+            self.assert_(
+                node_last_error(controller.app, container_ring.devs[0])
+                is not None)
             self.assert_status_map(controller.PUT, (200, 201, 201, 201), 503,
                                    missing_container=True)
             self.assert_status_map(controller.DELETE,

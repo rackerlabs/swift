@@ -39,13 +39,13 @@ import uuid
 import hashlib
 import logging
 import traceback
+import xattr
 from os.path import basename, dirname, exists, getmtime, join
 from random import shuffle
 from tempfile import mkstemp
 from contextlib import contextmanager
 from collections import defaultdict
 
-from xattr import getxattr, setxattr
 from eventlet import Timeout
 from eventlet.hubs import trampoline
 
@@ -56,12 +56,12 @@ from swift.common.utils import mkdirs, Timestamp, \
     storage_directory, hash_path, renamer, fallocate, fsync, \
     fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
-    get_md5_socket, system_has_splice, splice, tee, SPLICE_F_MORE, \
-    F_SETPIPE_SZ
+    get_md5_socket, F_SETPIPE_SZ
+from swift.common.splice import splice, tee
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
     DiskFileDeleted, DiskFileError, DiskFileNotOpen, PathNotDir, \
-    ReplicationLockTimeout, DiskFileExpired
+    ReplicationLockTimeout, DiskFileExpired, DiskFileXattrNotSupported
 from swift.common.swob import multi_range_iterator
 from swift.common.storage_policy import get_policy_string, POLICIES
 from functools import partial
@@ -84,6 +84,22 @@ get_tmp_dir = partial(get_policy_string, TMP_BASE)
 MD5_OF_EMPTY_STRING = 'd41d8cd98f00b204e9800998ecf8427e'
 
 
+def _get_filename(fd):
+    """
+    Helper function to get to file name from a file descriptor or filename.
+
+    :param fd: file descriptor or filename.
+
+    :returns: the filename.
+    """
+    if hasattr(fd, 'name'):
+        # fd object
+        return fd.name
+
+    # fd is a filename
+    return fd
+
+
 def read_metadata(fd):
     """
     Helper function to read the pickled metadata from an object file.
@@ -96,14 +112,20 @@ def read_metadata(fd):
     key = 0
     try:
         while True:
-            metadata += getxattr(fd, '%s%s' % (METADATA_KEY, (key or '')))
+            metadata += xattr.getxattr(fd, '%s%s' % (METADATA_KEY,
+                                                     (key or '')))
             key += 1
-    except IOError:
-        pass
+    except IOError as e:
+        for err in 'ENOTSUP', 'EOPNOTSUPP':
+            if hasattr(errno, err) and e.errno == getattr(errno, err):
+                msg = "Filesystem at %s does not support xattr" % \
+                      _get_filename(fd)
+                logging.exception(msg)
+                raise DiskFileXattrNotSupported(e)
     return pickle.loads(metadata)
 
 
-def write_metadata(fd, metadata):
+def write_metadata(fd, metadata, xattr_size=65536):
     """
     Helper function to write pickled metadata for an object file.
 
@@ -113,9 +135,23 @@ def write_metadata(fd, metadata):
     metastr = pickle.dumps(metadata, PICKLE_PROTOCOL)
     key = 0
     while metastr:
-        setxattr(fd, '%s%s' % (METADATA_KEY, key or ''), metastr[:254])
-        metastr = metastr[254:]
-        key += 1
+        try:
+            xattr.setxattr(fd, '%s%s' % (METADATA_KEY, key or ''),
+                           metastr[:xattr_size])
+            metastr = metastr[xattr_size:]
+            key += 1
+        except IOError as e:
+            for err in 'ENOTSUP', 'EOPNOTSUPP':
+                if hasattr(errno, err) and e.errno == getattr(errno, err):
+                    msg = "Filesystem at %s does not support xattr" % \
+                          _get_filename(fd)
+                    logging.exception(msg)
+                    raise DiskFileXattrNotSupported(e)
+            if e.errno in (errno.ENOSPC, errno.EDQUOT):
+                msg = "No space left on device for %s" % _get_filename(fd)
+                logging.exception(msg)
+                raise DiskFileNoSpace()
+            raise
 
 
 def extract_policy_index(obj_path):
@@ -508,17 +544,15 @@ class DiskFileManager(object):
         self.use_splice = False
         self.pipe_size = None
 
-        splice_available = system_has_splice()
-
         conf_wants_splice = config_true_value(conf.get('splice', 'no'))
         # If the operator wants zero-copy with splice() but we don't have the
         # requisite kernel support, complain so they can go fix it.
-        if conf_wants_splice and not splice_available:
+        if conf_wants_splice and not splice.available:
             self.logger.warn(
                 "Use of splice() requested (config says \"splice = %s\"), "
                 "but the system does not support it. "
                 "splice() will not be used." % conf.get('splice'))
-        elif conf_wants_splice and splice_available:
+        elif conf_wants_splice and splice.available:
             try:
                 sockfd = get_md5_socket()
                 os.close(sockfd)
@@ -772,6 +806,11 @@ class DiskFileWriter(object):
         self._upload_size = 0
         self._last_sync = 0
         self._extension = '.data'
+        self._put_succeeded = False
+
+    @property
+    def put_succeeded(self):
+        return self._put_succeeded
 
     def write(self, chunk):
         """
@@ -818,6 +857,10 @@ class DiskFileWriter(object):
         # After the rename completes, this object will be available for other
         # requests to reference.
         renamer(self._tmppath, target_path)
+        # If rename is successful, flag put as succeeded. This is done to avoid
+        # unnecessary os.unlink() of tempfile later. As renamer() has
+        # succeeded, the tempfile would no longer exist at its original path.
+        self._put_succeeded = True
         try:
             hash_cleanup_listdir(self._datadir)
         except OSError:
@@ -970,8 +1013,8 @@ class DiskFileReader(object):
         try:
             while True:
                 # Read data from disk to pipe
-                bytes_in_pipe = self._threadpool.run_in_thread(
-                    splice, rfd, 0, client_wpipe, 0, pipe_size, 0)
+                (bytes_in_pipe, _1, _2) = self._threadpool.run_in_thread(
+                    splice, rfd, None, client_wpipe, None, pipe_size, 0)
                 if bytes_in_pipe == 0:
                     self._read_to_eof = True
                     self._drop_cache(rfd, dropped_cache,
@@ -1002,20 +1045,23 @@ class DiskFileReader(object):
                 # bytes in it, so read won't block, and we're splicing it into
                 # an MD5 socket, which synchronously hashes any data sent to
                 # it, so writing won't block either.
-                hashed = splice(hash_rpipe, 0, md5_sockfd, 0,
-                                bytes_in_pipe, SPLICE_F_MORE)
+                (hashed, _1, _2) = splice(hash_rpipe, None, md5_sockfd, None,
+                                          bytes_in_pipe, splice.SPLICE_F_MORE)
                 if hashed != bytes_in_pipe:
                     raise Exception("md5 socket didn't take all the data? "
                                     "(tried to write %d, but wrote %d)" %
                                     (bytes_in_pipe, hashed))
 
                 while bytes_in_pipe > 0:
-                    sent = splice(client_rpipe, 0, wsockfd, 0,
-                                  bytes_in_pipe, 0)
-                    if sent is None:  # would have blocked
-                        trampoline(wsockfd, write=True)
-                    else:
-                        bytes_in_pipe -= sent
+                    try:
+                        res = splice(client_rpipe, None, wsockfd, None,
+                                     bytes_in_pipe, 0)
+                        bytes_in_pipe -= res[0]
+                    except IOError as exc:
+                        if exc.errno == errno.EWOULDBLOCK:
+                            trampoline(wsockfd, write=True)
+                        else:
+                            raise
 
                 if self._bytes_read - dropped_cache > DROP_CACHE_WINDOW:
                     self._drop_cache(rfd, dropped_cache,
@@ -1558,23 +1604,31 @@ class DiskFile(object):
         if not exists(self._tmpdir):
             mkdirs(self._tmpdir)
         fd, tmppath = mkstemp(dir=self._tmpdir)
+        dfw = None
         try:
             if size is not None and size > 0:
                 try:
                     fallocate(fd, size)
                 except OSError:
                     raise DiskFileNoSpace()
-            yield DiskFileWriter(self._name, self._datadir, fd, tmppath,
+            dfw = DiskFileWriter(self._name, self._datadir, fd, tmppath,
                                  self._bytes_per_sync, self._threadpool)
+            yield dfw
         finally:
             try:
                 os.close(fd)
             except OSError:
                 pass
-            try:
-                os.unlink(tmppath)
-            except OSError:
-                pass
+            if (dfw is None) or (not dfw.put_succeeded):
+                # Try removing the temp file only if put did NOT succeed.
+                #
+                # dfw.put_succeeded is set to True after renamer() succeeds in
+                # DiskFileWriter._finalize_put()
+                try:
+                    os.unlink(tmppath)
+                except OSError:
+                    self._logger.exception('Error removing tempfile: %s' %
+                                           tmppath)
 
     def write_metadata(self, metadata):
         """
