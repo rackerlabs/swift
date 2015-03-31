@@ -1,3 +1,9 @@
+swift (2.2.1-1rax2) lucid; urgency=medium
+
+  * 058dbdd Change to iter_nodes to work with hummingbird
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 21 Jan 2015 14:15:02 +0000
+
 swift (2.2.1-1rax1) lucid; urgency=medium
 
   * 371097e Revert "log when a cors request would break if strict_cors_mode was turned on"
