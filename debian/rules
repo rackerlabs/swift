@@ -32,4 +32,3 @@ override_dh_installinit:
 	dh_installinit --no-start -pswift-object --init-script=swift-object-replicator
 	dh_installinit --no-start -pswift-object --init-script=swift-object-2
 	dh_installinit --no-start -pswift-container --init-script=swift-container-updater
-	dh_installinit --no-start -pswift-container --init-script=swift-container-sync
