@@ -1,3 +1,9 @@
+swift (2.2.1-1rax3) lucid; urgency=medium
+
+  * fe84f4b Prevent unauthorized delete in versioned container
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 14 Apr 2015 14:15:02 +0000
+
 swift (2.2.1-1rax2) lucid; urgency=medium
 
   * 058dbdd Change to iter_nodes to work with hummingbird
