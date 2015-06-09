@@ -1,3 +1,14 @@
+hummingbird (0.1.9) precise; urgency=low
+
+  * f66cb00 go: object server SYNC report newer files
+  * e734427 go: log 499 on client early disconnect
+  * b099ca3 go: replace ghetto getpwnam with os/user
+  * b9d0e88 go: check error returns part 1
+  * 68a5354 go: lower-case incoming ETag
+  * 32b44fe go: clean up and add to obj tests
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 09 Jun 2015 00:00:00 +0000
+
 hummingbird (0.1.8) precise; urgency=low
 
   * eac55be lowercase incoming etags
