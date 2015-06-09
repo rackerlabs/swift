@@ -7,9 +7,9 @@ export GOPATH=${BUILDPATH}
 	dh $@
 
 override_dh_auto_build:
-	mkdir -p ${BUILDPATH}/src
-	ln -s $(CURDIR) ${BUILDPATH}/src/hummingbird
-	cd ${BUILDPATH}/src/hummingbird; make get all
+	mkdir -p ${BUILDPATH}/src/github.com/openstack
+	ln -s $(CURDIR) ${BUILDPATH}/src/github.com/openstack/swift
+	cd ${BUILDPATH}/src/github.com/openstack/swift/go; make get all
 	rm -rf ${BUILDPATH}
 
 override_dh_auto_install:
