@@ -1,3 +1,10 @@
+hummingbird (0.1.10) precise; urgency=low
+
+  * 222d8d3 go: fix output of /recon/mounted
+  * 834c98b go: ring self-reloading
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 10 Jun 2015 00:00:00 +0000
+
 hummingbird (0.1.9) precise; urgency=low
 
   * f66cb00 go: object server SYNC report newer files
