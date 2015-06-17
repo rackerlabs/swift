@@ -1,3 +1,10 @@
+hummingbird (0.1.11) precise; urgency=low
+
+  * a2794a4 go: make full disk log message debug-level
+  * d7db27b go: limit replication per disk
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 17 Jun 2015 00:00:00 +0000
+
 hummingbird (0.1.10) precise; urgency=low
 
   * 222d8d3 go: fix output of /recon/mounted
