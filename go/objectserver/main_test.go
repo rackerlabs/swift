@@ -17,6 +17,7 @@ package objectserver
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -74,7 +75,7 @@ func makeObjectServer(settings ...string) (*TestServer, error) {
 	if err := conf.Close(); err != nil {
 		return nil, err
 	}
-	_, _, handler, _, _ := GetServer(conf.Name())
+	_, _, handler, _, _ := GetServer(conf.Name(), &flag.FlagSet{})
 	ts := httptest.NewServer(handler)
 	u, err := url.Parse(ts.URL)
 	if err != nil {
@@ -478,4 +479,69 @@ func TestDisconnectOnPut(t *testing.T) {
 
 	ts.handler.ServeHTTP(resp, req)
 	assert.Equal(t, resp.status, 499)
+}
+
+func TestEmptyDevice(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d//0/a/c/o", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+}
+
+func TestEmptyPartition(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d/sda//a/c/o", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+}
+
+func TestEmptyAccount(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d/sda/0//c/o", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+}
+
+func TestEmptyContainer(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d/sda/0/a//o", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+}
+
+func TestEmptyObject(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d/sda/0/a/c/", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
 }
