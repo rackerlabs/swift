@@ -1,3 +1,9 @@
+hummingbird (0.1.13) precise; urgency=low
+
+  * c20f899 go: fix init scripts
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 08 Jul 2015 00:01:00 +0000
+
 hummingbird (0.1.12) precise; urgency=low
 
   * 00d54ef go: return metadata as map[string]string
