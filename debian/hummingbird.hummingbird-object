@@ -31,7 +31,7 @@ hummingbird_status()
   fi
 
   for pid in $(cat $PIDFILE) ; do
-    if ! ps --no-headers p "$pid" | egrep "[h]ummingbird run $SERVICE" > /dev/null ; then
+    if ! ps --no-headers p "$pid" | egrep "[h]ummingbird $SERVICE" > /dev/null ; then
       # program running, bogus pidfile
       return 1
     fi
