@@ -1,3 +1,22 @@
+hummingbird (0.1.12) precise; urgency=low
+
+  * 00d54ef go: return metadata as map[string]string
+  * bc51b3a go: make unpickle mark() return error if mark is not found
+  * a98f4c0 go: check err on call to get free space on object puts
+  * 299aea3 go: check err on call to get free space on object sync
+  * e1f1d39 go: fix unpickling problem
+  * e3b302e go: add targeted replication
+  * 6db05ed go: make use of filepath.Join() in objectserver main
+  * 30dd9ba go: check for content length parse error on gets in object server
+  * b9aa152 go: check for empty path parts in object server
+  * 86e1dc6 go: add a few unit tests
+  * 761c0ed go: fix x-delete-at updates
+  * 62a92f7 go: always asynchronous finalize PUT and DELETE
+  * 1332e5b go: restructure cmd/hummingbird.go
+  * 08e6b61 go: document replication
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 08 Jul 2015 00:00:00 +0000
+
 hummingbird (0.1.11) precise; urgency=low
 
   * a2794a4 go: make full disk log message debug-level
