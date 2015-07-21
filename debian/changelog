@@ -1,3 +1,9 @@
+hummingbird (0.1.16) precise; urgency=low
+
+  * e596cab fixing 'not running' in init scripts
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon, 27 Jul 2015 00:01:00 +0000
+
 hummingbird (0.1.15) precise; urgency=low
 
   * 856429c go: goroutine leak
