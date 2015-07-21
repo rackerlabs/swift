@@ -1,3 +1,14 @@
+hummingbird (0.1.15) precise; urgency=low
+
+  * 856429c go: goroutine leak
+  * f18b456 go: allow profiling
+  * 1e42281 go: wait for availability on REPLICATE
+  * f4bf6bf go:  Adds memcache ring
+  * 2d5416a go: adding middleware & routing framework
+  * a67f99f go: fix expect 100-continue in replicator
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon, 27 Jul 2015 00:00:00 +0000
+
 hummingbird (0.1.14) precise; urgency=low
 
   * 7f7c6e2 go: fix scripts again
