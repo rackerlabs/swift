@@ -188,7 +188,7 @@ class TestReceiver(unittest.TestCase):
             self.assertEqual('No policy with index 2', err.body)
 
     @unit.patch_policies()
-    def test_Receiver_with_frag_index_header(self):
+    def test_Receiver_with_only_frag_index_header(self):
         # update router post policy patch
         self.controller._diskfile_router = diskfile.DiskFileRouter(
             self.conf, self.controller.logger)
@@ -208,6 +208,69 @@ class TestReceiver(unittest.TestCase):
              ':UPDATES: START', ':UPDATES: END'])
         self.assertEqual(rcvr.policy, POLICIES[1])
         self.assertEqual(rcvr.frag_index, 7)
+        self.assertEqual(rcvr.node_index, None)
+
+    @unit.patch_policies()
+    def test_Receiver_with_only_node_index_header(self):
+        # update router post policy patch
+        self.controller._diskfile_router = diskfile.DiskFileRouter(
+            self.conf, self.controller.logger)
+        req = swob.Request.blank(
+            '/sda1/1',
+            environ={'REQUEST_METHOD': 'SSYNC',
+                     'HTTP_X_BACKEND_SSYNC_NODE_INDEX': '7',
+                     'HTTP_X_BACKEND_STORAGE_POLICY_INDEX': '1'},
+            body=':MISSING_CHECK: START\r\n'
+                 ':MISSING_CHECK: END\r\n'
+                 ':UPDATES: START\r\n:UPDATES: END\r\n')
+        with self.assertRaises(HTTPException) as e:
+            ssync_receiver.Receiver(self.controller, req)
+        self.assertEqual(e.exception.status_int, 400)
+        # if a node index is included - it *must* be
+        # the same value of frag index
+        self.assertEqual(e.exception.body,
+                         'Frag-Index (None) != Node-Index (7)')
+
+    @unit.patch_policies()
+    def test_Receiver_with_matched_indexes(self):
+        # update router post policy patch
+        self.controller._diskfile_router = diskfile.DiskFileRouter(
+            self.conf, self.controller.logger)
+        req = swob.Request.blank(
+            '/sda1/1',
+            environ={'REQUEST_METHOD': 'SSYNC',
+                     'HTTP_X_BACKEND_SSYNC_NODE_INDEX': '7',
+                     'HTTP_X_BACKEND_SSYNC_FRAG_INDEX': '7',
+                     'HTTP_X_BACKEND_STORAGE_POLICY_INDEX': '1'},
+            body=':MISSING_CHECK: START\r\n'
+                 ':MISSING_CHECK: END\r\n'
+                 ':UPDATES: START\r\n:UPDATES: END\r\n')
+        rcvr = ssync_receiver.Receiver(self.controller, req)
+        body_lines = [chunk.strip() for chunk in rcvr() if chunk.strip()]
+        self.assertEqual(
+            body_lines,
+            [':MISSING_CHECK: START', ':MISSING_CHECK: END',
+             ':UPDATES: START', ':UPDATES: END'])
+        self.assertEqual(rcvr.policy, POLICIES[1])
+        self.assertEqual(rcvr.frag_index, 7)
+        self.assertEqual(rcvr.node_index, 7)
+
+    @unit.patch_policies()
+    def test_Receiver_with_mismatched_indexes(self):
+        # update router post policy patch
+        self.controller._diskfile_router = diskfile.DiskFileRouter(
+            self.conf, self.controller.logger)
+        req = swob.Request.blank(
+            '/sda1/1',
+            environ={'REQUEST_METHOD': 'SSYNC',
+                     'HTTP_X_BACKEND_SSYNC_NODE_INDEX': '6',
+                     'HTTP_X_BACKEND_SSYNC_FRAG_INDEX': '7',
+                     'HTTP_X_BACKEND_STORAGE_POLICY_INDEX': '1'},
+            body=':MISSING_CHECK: START\r\n'
+                 ':MISSING_CHECK: END\r\n'
+                 ':UPDATES: START\r\n:UPDATES: END\r\n')
+        self.assertRaises(HTTPException, ssync_receiver.Receiver,
+                          self.controller, req)
 
     def test_SSYNC_replication_lock_fail(self):
         def _mock(path):
@@ -1001,7 +1064,7 @@ class TestReceiver(unittest.TestCase):
         @server.public
         def _DELETE(request):
             if request.path == '/device/partition/a/c/works':
-                return swob.HTTPOk()
+                return swob.HTTPNoContent()
             else:
                 return swob.HTTPInternalServerError()
 
@@ -1116,7 +1179,7 @@ class TestReceiver(unittest.TestCase):
         def _PUT(request):
             _PUT_request[0] = request
             request.read_body = request.environ['wsgi.input'].read()
-            return swob.HTTPOk()
+            return swob.HTTPCreated()
 
         with mock.patch.object(self.controller, 'PUT', _PUT):
             self.controller.logger = mock.MagicMock()
@@ -1141,6 +1204,7 @@ class TestReceiver(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertFalse(self.controller.logger.exception.called)
             self.assertFalse(self.controller.logger.error.called)
+            self.assertEquals(len(_PUT_request), 1)  # sanity
             req = _PUT_request[0]
             self.assertEqual(req.path, '/device/partition/a/c/o')
             self.assertEqual(req.content_length, 1)
@@ -1168,7 +1232,7 @@ class TestReceiver(unittest.TestCase):
         def _PUT(request):
             _PUT_request[0] = request
             request.read_body = request.environ['wsgi.input'].read()
-            return swob.HTTPOk()
+            return swob.HTTPCreated()
 
         with mock.patch.object(self.controller, 'PUT', _PUT):
             self.controller.logger = mock.MagicMock()
@@ -1194,6 +1258,7 @@ class TestReceiver(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertFalse(self.controller.logger.exception.called)
             self.assertFalse(self.controller.logger.error.called)
+            self.assertEquals(len(_PUT_request), 1)  # sanity
             req = _PUT_request[0]
             self.assertEqual(req.path, '/device/partition/a/c/o')
             self.assertEqual(req.content_length, 1)
@@ -1211,13 +1276,71 @@ class TestReceiver(unittest.TestCase):
                     'content-encoding specialty-header')})
             self.assertEqual(req.read_body, '1')
 
+    def test_UPDATES_PUT_with_storage_policy_and_node_index(self):
+        # update router post policy patch
+        self.controller._diskfile_router = diskfile.DiskFileRouter(
+            self.conf, self.controller.logger)
+
+        _PUT_request = [None]
+
+        @server.public
+        def _PUT(request):
+            _PUT_request[0] = request
+            request.read_body = request.environ['wsgi.input'].read()
+            return swob.HTTPCreated()
+
+        with mock.patch.object(self.controller, 'PUT', _PUT):
+            self.controller.logger = mock.MagicMock()
+            req = swob.Request.blank(
+                '/device/partition',
+                environ={'REQUEST_METHOD': 'SSYNC',
+                         'HTTP_X_BACKEND_SSYNC_NODE_INDEX': '7',
+                         'HTTP_X_BACKEND_SSYNC_FRAG_INDEX': '7',
+                         'HTTP_X_BACKEND_STORAGE_POLICY_INDEX': '0'},
+                body=':MISSING_CHECK: START\r\n:MISSING_CHECK: END\r\n'
+                     ':UPDATES: START\r\n'
+                     'PUT /a/c/o\r\n'
+                     'Content-Length: 1\r\n'
+                     'X-Timestamp: 1364456113.12344\r\n'
+                     'X-Object-Meta-Test1: one\r\n'
+                     'Content-Encoding: gzip\r\n'
+                     'Specialty-Header: value\r\n'
+                     '\r\n'
+                     '1')
+            resp = req.get_response(self.controller)
+            self.assertEqual(
+                self.body_lines(resp.body),
+                [':MISSING_CHECK: START', ':MISSING_CHECK: END',
+                 ':UPDATES: START', ':UPDATES: END'])
+            self.assertEqual(resp.status_int, 200)
+            self.assertFalse(self.controller.logger.exception.called)
+            self.assertFalse(self.controller.logger.error.called)
+            self.assertEquals(len(_PUT_request), 1)  # sanity
+            req = _PUT_request[0]
+            self.assertEqual(req.path, '/device/partition/a/c/o')
+            self.assertEqual(req.content_length, 1)
+            self.assertEqual(req.headers, {
+                'Content-Length': '1',
+                'X-Timestamp': '1364456113.12344',
+                'X-Object-Meta-Test1': 'one',
+                'Content-Encoding': 'gzip',
+                'Specialty-Header': 'value',
+                'Host': 'localhost:80',
+                'X-Backend-Storage-Policy-Index': '0',
+                'X-Backend-Ssync-Frag-Index': '7',
+                'X-Backend-Replication': 'True',
+                'X-Backend-Replication-Headers': (
+                    'content-length x-timestamp x-object-meta-test1 '
+                    'content-encoding specialty-header')})
+            self.assertEqual(req.read_body, '1')
+
     def test_UPDATES_DELETE(self):
         _DELETE_request = [None]
 
         @server.public
         def _DELETE(request):
             _DELETE_request[0] = request
-            return swob.HTTPOk()
+            return swob.HTTPNoContent()
 
         with mock.patch.object(self.controller, 'DELETE', _DELETE):
             self.controller.logger = mock.MagicMock()
@@ -1237,6 +1360,7 @@ class TestReceiver(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertFalse(self.controller.logger.exception.called)
             self.assertFalse(self.controller.logger.error.called)
+            self.assertEquals(len(_DELETE_request), 1)  # sanity
             req = _DELETE_request[0]
             self.assertEqual(req.path, '/device/partition/a/c/o')
             self.assertEqual(req.headers, {
@@ -1272,6 +1396,7 @@ class TestReceiver(unittest.TestCase):
         self.assertEqual(resp.status_int, 200)
         self.controller.logger.exception.assert_called_once_with(
             'None/device/partition EXCEPTION in replication.Receiver')
+        self.assertEquals(len(_BONK_request), 1)  # sanity
         self.assertEqual(_BONK_request[0], None)
 
     def test_UPDATES_multiple(self):
@@ -1281,12 +1406,12 @@ class TestReceiver(unittest.TestCase):
         def _PUT(request):
             _requests.append(request)
             request.read_body = request.environ['wsgi.input'].read()
-            return swob.HTTPOk()
+            return swob.HTTPCreated()
 
         @server.public
         def _DELETE(request):
             _requests.append(request)
-            return swob.HTTPOk()
+            return swob.HTTPNoContent()
 
         with contextlib.nested(
                 mock.patch.object(self.controller, 'PUT', _PUT),
@@ -1332,6 +1457,7 @@ class TestReceiver(unittest.TestCase):
             self.assertEqual(resp.status_int, 200)
             self.assertFalse(self.controller.logger.exception.called)
             self.assertFalse(self.controller.logger.error.called)
+            self.assertEquals(len(_requests), 6)  # sanity
             req = _requests.pop(0)
             self.assertEqual(req.method, 'PUT')
             self.assertEqual(req.path, '/device/partition/a/c/o1')
@@ -1456,6 +1582,7 @@ class TestReceiver(unittest.TestCase):
         self.assertEqual(resp.status_int, 200)
         self.assertFalse(self.controller.logger.exception.called)
         self.assertFalse(self.controller.logger.error.called)
+        self.assertEquals(len(_requests), 2)  # sanity
         req = _requests.pop(0)
         self.assertEqual(req.path, '/device/partition/a/c/o1')
         self.assertEqual(req.content_length, 3)

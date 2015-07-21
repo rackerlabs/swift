@@ -105,7 +105,7 @@ def roundrobin_datadirs(datadirs):
     while its:
         for it in its:
             try:
-                yield it.next()
+                yield next(it)
             except StopIteration:
                 its.remove(it)
 
@@ -154,6 +154,7 @@ class Replicator(Daemon):
         self.logger = logger or get_logger(conf, log_route='replicator')
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
+        self.bind_ip = conf.get('bind_ip', '0.0.0.0')
         self.port = int(conf.get('bind_port', self.default_port))
         concurrency = int(conf.get('concurrency', 8))
         self.cpool = GreenPool(size=concurrency)
@@ -525,7 +526,7 @@ class Replicator(Daemon):
                 success = self._repl_to_node(node, broker, partition, info,
                                              different_region)
             except DriveNotMounted:
-                repl_nodes.append(more_nodes.next())
+                repl_nodes.append(next(more_nodes))
                 self.logger.error(_('ERROR Remote drive not mounted %s'), node)
             except (Exception, Timeout):
                 self.logger.exception(_('ERROR syncing %(file)s with node'
@@ -580,7 +581,7 @@ class Replicator(Daemon):
         """Run a replication pass once."""
         self._zero_stats()
         dirs = []
-        ips = whataremyips()
+        ips = whataremyips(self.bind_ip)
         if not ips:
             self.logger.error(_('ERROR Failed to get my own IPs?'))
             return

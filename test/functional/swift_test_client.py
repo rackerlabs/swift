@@ -29,9 +29,12 @@ from xml.dom import minidom
 
 from swiftclient import get_auth
 
+from swift.common import constraints
 from swift.common.utils import config_true_value
 
 from test import safe_repr
+
+httplib._MAXHEADERS = constraints.MAX_HEADER_COUNT
 
 
 class AuthenticationFailed(Exception):
@@ -68,7 +71,7 @@ class ResponseError(Exception):
 
 
 def listing_empty(method):
-    for i in xrange(6):
+    for i in range(6):
         if len(method()) == 0:
             return True
 
@@ -334,7 +337,7 @@ class Connection(object):
                                           port=self.storage_port)
         #self.connection.set_debuglevel(3)
         self.connection.putrequest('PUT', path)
-        for key, value in headers.iteritems():
+        for key, value in headers.items():
             self.connection.putheader(key, value)
         self.connection.endheaders()
 

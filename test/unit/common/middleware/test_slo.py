@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from six.moves import range
+
 import hashlib
 import time
 import unittest
@@ -24,7 +26,7 @@ from swift.common import swob, utils
 from swift.common.exceptions import ListingIterError, SegmentError
 from swift.common.middleware import slo
 from swift.common.swob import Request, Response, HTTPException
-from swift.common.utils import quote, json
+from swift.common.utils import quote, json, closing_if_possible
 from test.unit.common.middleware.helpers import FakeSwift
 
 
@@ -74,8 +76,10 @@ class SloTestCase(unittest.TestCase):
         body = ''
         caught_exc = None
         try:
-            for chunk in body_iter:
-                body += chunk
+            # appease the close-checker
+            with closing_if_possible(body_iter):
+                for chunk in body_iter:
+                    body += chunk
         except Exception as exc:
             if expect_exception:
                 caught_exc = exc
@@ -232,7 +236,7 @@ class TestSloPutManifest(SloTestCase):
             '/?multipart-manifest=put',
             environ={'REQUEST_METHOD': 'PUT'}, body=test_json_data)
         self.assertEquals(
-            self.slo.handle_multipart_put(req, fake_start_response),
+            list(self.slo.handle_multipart_put(req, fake_start_response)),
             ['passed'])
 
     def test_handle_multipart_put_success(self):
@@ -949,6 +953,9 @@ class TestSloGetManifest(SloTestCase):
                           'X-Object-Meta-Fish': 'Bass'},
             "[not {json (at ++++all")
 
+    def tearDown(self):
+        self.assertEqual(self.app.unclosed_requests, {})
+
     def test_get_manifest_passthrough(self):
         req = Request.blank(
             '/v1/AUTH_test/gettest/manifest-bc?multipart-manifest=get',
@@ -1374,7 +1381,7 @@ class TestSloGetManifest(SloTestCase):
 
     def test_recursion_limit(self):
         # man1 points to obj1 and man2, man2 points to obj2 and man3...
-        for i in xrange(20):
+        for i in range(20):
             self.app.register('GET', '/v1/AUTH_test/gettest/obj%d' % i,
                               swob.HTTPOk, {'Content-Type': 'text/plain',
                                             'Etag': md5hex('body%02d' % i)},
@@ -1391,7 +1398,7 @@ class TestSloGetManifest(SloTestCase):
                           'Etag': 'man%d' % i},
             manifest_json)
 
-        for i in xrange(19, 0, -1):
+        for i in range(19, 0, -1):
             manifest_data = [
                 {'name': '/gettest/obj%d' % i,
                  'hash': md5hex('body%02d' % i),
@@ -1429,7 +1436,7 @@ class TestSloGetManifest(SloTestCase):
 
     def test_sub_slo_recursion(self):
         # man1 points to man2 and obj1, man2 points to man3 and obj2...
-        for i in xrange(11):
+        for i in range(11):
             self.app.register('GET', '/v1/AUTH_test/gettest/obj%d' % i,
                               swob.HTTPOk, {'Content-Type': 'text/plain',
                                             'Content-Length': '6',
@@ -1452,7 +1459,7 @@ class TestSloGetManifest(SloTestCase):
                           'Etag': md5hex('body%2d' % i)},
             None)
 
-        for i in xrange(9, 0, -1):
+        for i in range(9, 0, -1):
             manifest_data = [
                 {'name': '/gettest/man%d' % (i + 1),
                  'hash': 'man%d' % (i + 1),
@@ -1486,7 +1493,7 @@ class TestSloGetManifest(SloTestCase):
 
     def test_sub_slo_recursion_limit(self):
         # man1 points to man2 and obj1, man2 points to man3 and obj2...
-        for i in xrange(12):
+        for i in range(12):
             self.app.register('GET', '/v1/AUTH_test/gettest/obj%d' % i,
                               swob.HTTPOk,
                               {'Content-Type': 'text/plain',
@@ -1509,7 +1516,7 @@ class TestSloGetManifest(SloTestCase):
                           'Etag': md5hex('body%2d' % i)},
             None)
 
-        for i in xrange(11, 0, -1):
+        for i in range(11, 0, -1):
             manifest_data = [
                 {'name': '/gettest/man%d' % (i + 1),
                  'hash': 'man%d' % (i + 1),

@@ -146,6 +146,8 @@ the manifest and the segments it's referring to) in the container and account
 metadata which can be used for stats purposes.
 """
 
+from six.moves import range
+
 from cStringIO import StringIO
 from datetime import datetime
 import mimetypes
@@ -159,9 +161,9 @@ from swift.common.swob import Request, HTTPBadRequest, HTTPServerError, \
     Response
 from swift.common.utils import json, get_logger, config_true_value, \
     get_valid_utf8_str, override_bytes_from_content_type, split_path, \
-    register_swift_info, RateLimitedIterator, quote
-from swift.common.request_helpers import SegmentedIterable, \
-    closing_if_possible, close_if_possible
+    register_swift_info, RateLimitedIterator, quote, close_if_possible, \
+    closing_if_possible
+from swift.common.request_helpers import SegmentedIterable
 from swift.common.constraints import check_utf8, MAX_BUFFERED_SLO_SEGMENTS
 from swift.common.http import HTTP_NOT_FOUND, HTTP_UNAUTHORIZED, is_success
 from swift.common.wsgi import WSGIContext, make_subrequest
@@ -205,7 +207,7 @@ class SloPutContext(WSGIContext):
     def handle_slo_put(self, req, start_response):
         app_resp = self._app_call(req.environ)
 
-        for i in xrange(len(self._response_headers)):
+        for i in range(len(self._response_headers)):
             if self._response_headers[i][0].lower() == 'etag':
                 self._response_headers[i] = ('Etag', self.slo_etag)
                 break
@@ -239,6 +241,7 @@ class SloGetContext(WSGIContext):
         sub_resp = sub_req.get_response(self.slo.app)
 
         if not is_success(sub_resp.status_int):
+            close_if_possible(sub_resp.app_iter)
             raise ListingIterError(
                 'ERROR: while fetching %s, GET of submanifest %s '
                 'failed with status %d' % (req.path, sub_req.path,
@@ -412,7 +415,8 @@ class SloGetContext(WSGIContext):
         return response(req.environ, start_response)
 
     def get_or_head_response(self, req, resp_headers, resp_iter):
-        resp_body = ''.join(resp_iter)
+        with closing_if_possible(resp_iter):
+            resp_body = ''.join(resp_iter)
         try:
             segments = json.loads(resp_body)
         except ValueError:

@@ -80,6 +80,9 @@ class FakeResponse(object):
             self.fp = StringIO.StringIO(
                 '%x\r\n%s\r\n0\r\n\r\n' % (len(chunk_body), chunk_body))
 
+    def read(self, *args, **kwargs):
+        return ''
+
     def close(self):
         self.close_called = True
 
@@ -261,6 +264,76 @@ class TestSender(BaseTestSender):
                 mock.call('Transfer-Encoding', 'chunked'),
                 mock.call('X-Backend-Storage-Policy-Index', 1),
                 mock.call('X-Backend-Ssync-Frag-Index', 0),
+                mock.call('X-Backend-Ssync-Node-Index', 0),
+            ],
+            'endheaders': [mock.call()],
+        }
+        for method_name, expected_calls in expectations.items():
+            mock_method = getattr(mock_conn, method_name)
+            self.assertEquals(expected_calls, mock_method.mock_calls,
+                              'connection method "%s" got %r not %r' % (
+                                  method_name, mock_method.mock_calls,
+                                  expected_calls))
+
+    def test_connect_handoff(self):
+        node = dict(replication_ip='1.2.3.4', replication_port=5678,
+                    device='sda1')
+        job = dict(partition='9', policy=POLICIES[1], frag_index=9)
+        self.sender = ssync_sender.Sender(self.daemon, node, job, None)
+        self.sender.suffixes = ['abc']
+        with mock.patch(
+                'swift.obj.ssync_sender.bufferedhttp.BufferedHTTPConnection'
+        ) as mock_conn_class:
+            mock_conn = mock_conn_class.return_value
+            mock_resp = mock.MagicMock()
+            mock_resp.status = 200
+            mock_conn.getresponse.return_value = mock_resp
+            self.sender.connect()
+        mock_conn_class.assert_called_once_with('1.2.3.4:5678')
+        expectations = {
+            'putrequest': [
+                mock.call('SSYNC', '/sda1/9'),
+            ],
+            'putheader': [
+                mock.call('Transfer-Encoding', 'chunked'),
+                mock.call('X-Backend-Storage-Policy-Index', 1),
+                mock.call('X-Backend-Ssync-Frag-Index', 9),
+                mock.call('X-Backend-Ssync-Node-Index', ''),
+            ],
+            'endheaders': [mock.call()],
+        }
+        for method_name, expected_calls in expectations.items():
+            mock_method = getattr(mock_conn, method_name)
+            self.assertEquals(expected_calls, mock_method.mock_calls,
+                              'connection method "%s" got %r not %r' % (
+                                  method_name, mock_method.mock_calls,
+                                  expected_calls))
+
+    def test_connect_handoff_replicated(self):
+        node = dict(replication_ip='1.2.3.4', replication_port=5678,
+                    device='sda1')
+        # no frag_index in rsync job
+        job = dict(partition='9', policy=POLICIES[1])
+        self.sender = ssync_sender.Sender(self.daemon, node, job, None)
+        self.sender.suffixes = ['abc']
+        with mock.patch(
+                'swift.obj.ssync_sender.bufferedhttp.BufferedHTTPConnection'
+        ) as mock_conn_class:
+            mock_conn = mock_conn_class.return_value
+            mock_resp = mock.MagicMock()
+            mock_resp.status = 200
+            mock_conn.getresponse.return_value = mock_resp
+            self.sender.connect()
+        mock_conn_class.assert_called_once_with('1.2.3.4:5678')
+        expectations = {
+            'putrequest': [
+                mock.call('SSYNC', '/sda1/9'),
+            ],
+            'putheader': [
+                mock.call('Transfer-Encoding', 'chunked'),
+                mock.call('X-Backend-Storage-Policy-Index', 1),
+                mock.call('X-Backend-Ssync-Frag-Index', ''),
+                mock.call('X-Backend-Ssync-Node-Index', ''),
             ],
             'endheaders': [mock.call()],
         }
@@ -1370,7 +1443,7 @@ class TestBaseSsync(BaseTestSender):
         # sanity check, they are not the same ondisk files!
         self.assertNotEqual(tx_df._datadir, rx_df._datadir)
         rx_metadata = dict(rx_df.get_metadata())
-        for k, v in tx_df.get_metadata().iteritems():
+        for k, v in tx_df.get_metadata().items():
             if k == 'X-Object-Sysmeta-Ec-Frag-Index':
                 # if tx_df had a frag_index then rx_df should also have one
                 self.assertTrue(k in rx_metadata)
@@ -1440,7 +1513,7 @@ class TestBaseSsync(BaseTestSender):
                            (('tx', ':UPDATES: END'), unexpected),
                            (('rx', ':UPDATES: START'), rx_updates),
                            (('rx', ':UPDATES: END'), unexpected)])
-        expect_handshake = handshakes.next()
+        expect_handshake = next(handshakes)
         phases = ('tx_missing', 'rx_missing', 'tx_updates', 'rx_updates')
         results = dict((k, []) for k in phases)
         handler = unexpected
@@ -1451,7 +1524,7 @@ class TestBaseSsync(BaseTestSender):
             if line == expect_handshake[0]:
                 handler = expect_handshake[1]
                 try:
-                    expect_handshake = handshakes.next()
+                    expect_handshake = next(handshakes)
                 except StopIteration:
                     # should be the last line
                     self.assertFalse(
@@ -1461,7 +1534,7 @@ class TestBaseSsync(BaseTestSender):
 
         try:
             # check all handshakes occurred
-            missed = handshakes.next()
+            missed = next(handshakes)
             self.fail('Handshake %s not found' % str(missed[0]))
         except StopIteration:
             pass
@@ -1480,7 +1553,7 @@ class TestBaseSsync(BaseTestSender):
                               have been used as a source for sync'ing
         :param rx_frag_index: the fragment index of expected rx diskfiles
         """
-        for o_name, diskfiles in tx_objs.iteritems():
+        for o_name, diskfiles in tx_objs.items():
             for tx_df in diskfiles:
                 if tx_frag_index is None or tx_df._frag_index == tx_frag_index:
                     # this diskfile should have been sync'd,
@@ -1502,7 +1575,7 @@ class TestBaseSsync(BaseTestSender):
 
     def _verify_tombstones(self, tx_objs, policy):
         # verify tx and rx tombstones that should be in sync
-        for o_name, diskfiles in tx_objs.iteritems():
+        for o_name, diskfiles in tx_objs.items():
             for tx_df_ in diskfiles:
                 try:
                     self._open_tx_diskfile(o_name, policy)
@@ -1536,25 +1609,25 @@ class TestSsyncEC(TestBaseSsync):
         tx_df_mgr = self.daemon._diskfile_router[policy]
         rx_df_mgr = self.rx_controller._diskfile_router[policy]
         # o1 has primary and handoff fragment archives
-        t1 = self.ts_iter.next()
+        t1 = next(self.ts_iter)
         tx_objs['o1'] = self._create_ondisk_files(
             tx_df_mgr, 'o1', policy, t1, (rx_node_index, tx_node_index))
         # o2 only has primary
-        t2 = self.ts_iter.next()
+        t2 = next(self.ts_iter)
         tx_objs['o2'] = self._create_ondisk_files(
             tx_df_mgr, 'o2', policy, t2, (tx_node_index,))
         # o3 only has handoff
-        t3 = self.ts_iter.next()
+        t3 = next(self.ts_iter)
         tx_objs['o3'] = self._create_ondisk_files(
             tx_df_mgr, 'o3', policy, t3, (rx_node_index,))
         # o4 primary and handoff fragment archives on tx, handoff in sync on rx
-        t4 = self.ts_iter.next()
+        t4 = next(self.ts_iter)
         tx_objs['o4'] = self._create_ondisk_files(
             tx_df_mgr, 'o4', policy, t4, (tx_node_index, rx_node_index,))
         rx_objs['o4'] = self._create_ondisk_files(
             rx_df_mgr, 'o4', policy, t4, (rx_node_index,))
         # o5 is a tombstone, missing on receiver
-        t5 = self.ts_iter.next()
+        t5 = next(self.ts_iter)
         tx_tombstones['o5'] = self._create_ondisk_files(
             tx_df_mgr, 'o5', policy, t5, (tx_node_index,))
         tx_tombstones['o5'][0].delete(t5)
@@ -1621,25 +1694,25 @@ class TestSsyncEC(TestBaseSsync):
         tx_df_mgr = self.daemon._diskfile_router[policy]
         rx_df_mgr = self.rx_controller._diskfile_router[policy]
         # o1 only has primary
-        t1 = self.ts_iter.next()
+        t1 = next(self.ts_iter)
         tx_objs['o1'] = self._create_ondisk_files(
             tx_df_mgr, 'o1', policy, t1, (tx_node_index,))
         # o2 only has primary
-        t2 = self.ts_iter.next()
+        t2 = next(self.ts_iter)
         tx_objs['o2'] = self._create_ondisk_files(
             tx_df_mgr, 'o2', policy, t2, (tx_node_index,))
         # o3 only has primary
-        t3 = self.ts_iter.next()
+        t3 = next(self.ts_iter)
         tx_objs['o3'] = self._create_ondisk_files(
             tx_df_mgr, 'o3', policy, t3, (tx_node_index,))
         # o4 primary fragment archives on tx, handoff in sync on rx
-        t4 = self.ts_iter.next()
+        t4 = next(self.ts_iter)
         tx_objs['o4'] = self._create_ondisk_files(
             tx_df_mgr, 'o4', policy, t4, (tx_node_index,))
         rx_objs['o4'] = self._create_ondisk_files(
             rx_df_mgr, 'o4', policy, t4, (rx_node_index,))
         # o5 is a tombstone, missing on receiver
-        t5 = self.ts_iter.next()
+        t5 = next(self.ts_iter)
         tx_tombstones['o5'] = self._create_ondisk_files(
             tx_df_mgr, 'o5', policy, t5, (tx_node_index,))
         tx_tombstones['o5'][0].delete(t5)
@@ -1702,7 +1775,7 @@ class TestSsyncEC(TestBaseSsync):
         failed_path = reconstruct_fa_calls[1][3]['name']
         expect_sync_paths.remove(failed_path)
         failed_obj = None
-        for obj, diskfiles in tx_objs.iteritems():
+        for obj, diskfiles in tx_objs.items():
             if diskfiles[0]._name == failed_path:
                 failed_obj = obj
         # sanity check
@@ -1729,26 +1802,26 @@ class TestSsyncReplication(TestBaseSsync):
         tx_df_mgr = self.daemon._diskfile_router[policy]
         rx_df_mgr = self.rx_controller._diskfile_router[policy]
         # o1 and o2 are on tx only
-        t1 = self.ts_iter.next()
+        t1 = next(self.ts_iter)
         tx_objs['o1'] = self._create_ondisk_files(tx_df_mgr, 'o1', policy, t1)
-        t2 = self.ts_iter.next()
+        t2 = next(self.ts_iter)
         tx_objs['o2'] = self._create_ondisk_files(tx_df_mgr, 'o2', policy, t2)
         # o3 is on tx and older copy on rx
-        t3a = self.ts_iter.next()
+        t3a = next(self.ts_iter)
         rx_objs['o3'] = self._create_ondisk_files(tx_df_mgr, 'o3', policy, t3a)
-        t3b = self.ts_iter.next()
+        t3b = next(self.ts_iter)
         tx_objs['o3'] = self._create_ondisk_files(tx_df_mgr, 'o3', policy, t3b)
         # o4 in sync on rx and tx
-        t4 = self.ts_iter.next()
+        t4 = next(self.ts_iter)
         tx_objs['o4'] = self._create_ondisk_files(tx_df_mgr, 'o4', policy, t4)
         rx_objs['o4'] = self._create_ondisk_files(rx_df_mgr, 'o4', policy, t4)
         # o5 is a tombstone, missing on receiver
-        t5 = self.ts_iter.next()
+        t5 = next(self.ts_iter)
         tx_tombstones['o5'] = self._create_ondisk_files(
             tx_df_mgr, 'o5', policy, t5)
         tx_tombstones['o5'][0].delete(t5)
         # o6 is a tombstone, in sync on tx and rx
-        t6 = self.ts_iter.next()
+        t6 = next(self.ts_iter)
         tx_tombstones['o6'] = self._create_ondisk_files(
             tx_df_mgr, 'o6', policy, t6)
         tx_tombstones['o6'][0].delete(t6)
@@ -1756,9 +1829,9 @@ class TestSsyncReplication(TestBaseSsync):
             rx_df_mgr, 'o6', policy, t6)
         rx_tombstones['o6'][0].delete(t6)
         # o7 is a tombstone on tx, older data on rx
-        t7a = self.ts_iter.next()
+        t7a = next(self.ts_iter)
         rx_objs['o7'] = self._create_ondisk_files(rx_df_mgr, 'o7', policy, t7a)
-        t7b = self.ts_iter.next()
+        t7b = next(self.ts_iter)
         tx_tombstones['o7'] = self._create_ondisk_files(
             tx_df_mgr, 'o7', policy, t7b)
         tx_tombstones['o7'][0].delete(t7b)

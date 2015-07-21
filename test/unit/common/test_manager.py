@@ -156,7 +156,7 @@ class TestManagerModule(unittest.TestCase):
 
             def waitpid(self, pid, options):
                 try:
-                    rv = self.pid_map[pid].next()
+                    rv = next(self.pid_map[pid])
                 except StopIteration:
                     raise OSError(errno.ECHILD, os.strerror(errno.ECHILD))
                 except KeyError:
@@ -176,7 +176,7 @@ class TestManagerModule(unittest.TestCase):
 
             def time(self):
                 try:
-                    self.tock += self.ticks.next()
+                    self.tock += next(self.ticks)
                 except StopIteration:
                     self.tock += 1
                 return self.tock
@@ -191,7 +191,7 @@ class TestManagerModule(unittest.TestCase):
 
             def get_running_pids(self):
                 try:
-                    rv = self.heartbeat.next()
+                    rv = next(self.heartbeat)
                     return rv
                 except StopIteration:
                     return {}
@@ -602,14 +602,15 @@ class TestServer(unittest.TestCase):
             server = manager.Server('proxy', run_dir=t)
             # test get one file
             iter = server.iter_pid_files()
-            pid_file, pid = iter.next()
+            pid_file, pid = next(iter)
             self.assertEquals(pid_file, self.join_run_dir('proxy-server.pid'))
             self.assertEquals(pid, 1)
             # ... and only one file
             self.assertRaises(StopIteration, iter.next)
             # test invalid value in pid file
             server = manager.Server('auth', run_dir=t)
-            self.assertRaises(ValueError, server.iter_pid_files().next)
+            pid_file, pid = server.iter_pid_files().next()
+            self.assertEqual(None, pid)
             # test object-server doesn't steal pids from object-replicator
             server = manager.Server('object', run_dir=t)
             self.assertRaises(StopIteration, server.iter_pid_files().next)
@@ -698,10 +699,12 @@ class TestServer(unittest.TestCase):
 
     def test_signal_pids(self):
         temp_files = (
+            ('var/run/zero-server.pid', 0),
             ('var/run/proxy-server.pid', 1),
             ('var/run/auth-server.pid', 2),
             ('var/run/one-server.pid', 3),
             ('var/run/object-server.pid', 4),
+            ('var/run/invalid-server.pid', 'Forty-Two'),
             ('proc/3/cmdline', 'swift-another-server')
         )
         with temptree(*zip(*temp_files)) as t:
@@ -758,6 +761,29 @@ class TestServer(unittest.TestCase):
                     self.assert_('removing pid file' in output.lower())
                     one_pid = self.join_run_dir('one-server.pid')
                     self.assert_(one_pid in output)
+
+                    server = manager.Server('zero', run_dir=manager.RUN_DIR)
+                    self.assertTrue(os.path.exists(
+                        self.join_run_dir('zero-server.pid')))  # sanity
+                    # test verbose warns on removing pid file with invalid pid
+                    pids = server.signal_pids(signal.SIG_DFL, verbose=True)
+                    output = pop_stream(f)
+                    old_stdout.write('output %s' % output)
+                    self.assert_('with invalid pid' in output.lower())
+                    self.assertFalse(os.path.exists(
+                        self.join_run_dir('zero-server.pid')))
+                    server = manager.Server('invalid-server',
+                                            run_dir=manager.RUN_DIR)
+                    self.assertTrue(os.path.exists(
+                        self.join_run_dir('invalid-server.pid')))  # sanity
+                    # test verbose warns on removing pid file with invalid pid
+                    pids = server.signal_pids(signal.SIG_DFL, verbose=True)
+                    output = pop_stream(f)
+                    old_stdout.write('output %s' % output)
+                    self.assert_('with invalid pid' in output.lower())
+                    self.assertFalse(os.path.exists(
+                        self.join_run_dir('invalid-server.pid')))
+
                     # reset mock os with no running pids
                     manager.os = MockOs([])
                     # test warning with insufficient permissions
@@ -1021,7 +1047,7 @@ class TestServer(unittest.TestCase):
                 self.pids = (p for p in pids)
 
             def Popen(self, args, **kwargs):
-                return MockProc(self.pids.next(), args, **kwargs)
+                return MockProc(next(self.pids), args, **kwargs)
 
         class MockProc(object):
 
@@ -1295,7 +1321,7 @@ class TestServer(unittest.TestCase):
             def __call__(self, conf_file, **kwargs):
                 self.conf_files.append(conf_file)
                 self.kwargs.append(kwargs)
-                rv = self.pids.next()
+                rv = next(self.pids)
                 if isinstance(rv, Exception):
                     raise rv
                 else:

@@ -26,6 +26,7 @@ from hashlib import md5
 
 import mock
 from eventlet import Timeout
+from six.moves import range
 
 import swift
 from swift.common import utils, swob
@@ -127,7 +128,7 @@ class BaseObjectControllerMixin(object):
                          itertools.count(int(time.time())))
 
     def ts(self):
-        return self._ts_iter.next()
+        return next(self._ts_iter)
 
     def replicas(self, policy=None):
         policy = policy or POLICIES.default
@@ -464,9 +465,9 @@ class BaseObjectControllerMixin(object):
         for policy_index in test_indexes:
             req = swob.Request.blank(
                 '/v1/a/c/o', method='DELETE', headers={
-                    'X-Timestamp': ts.next().internal})
+                    'X-Timestamp': next(ts).internal})
             codes = [409] * self.obj_ring.replicas
-            ts_iter = itertools.repeat(ts.next().internal)
+            ts_iter = itertools.repeat(next(ts).internal)
             with set_http_connect(*codes, timestamps=ts_iter):
                 resp = req.get_response(self.app)
             self.assertEqual(resp.status_int, 409)
@@ -736,8 +737,8 @@ class TestReplicatedObjController(BaseObjectControllerMixin,
             req = swob.Request.blank(
                 '/v1/a/c/o', method='PUT', headers={
                     'Content-Length': 0,
-                    'X-Timestamp': ts.next().internal})
-            ts_iter = itertools.repeat(ts.next().internal)
+                    'X-Timestamp': next(ts).internal})
+            ts_iter = itertools.repeat(next(ts).internal)
             codes = [409] * self.obj_ring.replicas
             with set_http_connect(*codes, timestamps=ts_iter):
                 resp = req.get_response(self.app)
@@ -747,11 +748,11 @@ class TestReplicatedObjController(BaseObjectControllerMixin,
         ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
         test_indexes = [None] + [int(p) for p in POLICIES]
         for policy_index in test_indexes:
-            orig_timestamp = ts.next().internal
+            orig_timestamp = next(ts).internal
             req = swob.Request.blank(
                 '/v1/a/c/o', method='PUT', headers={
                     'Content-Length': 0,
-                    'X-Timestamp': ts.next().internal})
+                    'X-Timestamp': next(ts).internal})
             ts_iter = itertools.repeat(orig_timestamp)
             codes = [201] * self.obj_ring.replicas
             with set_http_connect(*codes, timestamps=ts_iter):
@@ -763,8 +764,8 @@ class TestReplicatedObjController(BaseObjectControllerMixin,
         req = swob.Request.blank(
             '/v1/a/c/o', method='PUT', headers={
                 'Content-Length': 0,
-                'X-Timestamp': ts.next().internal})
-        ts_iter = iter([ts.next().internal, None, None])
+                'X-Timestamp': next(ts).internal})
+        ts_iter = iter([next(ts).internal, None, None])
         codes = [409] + [201] * (self.obj_ring.replicas - 1)
         with set_http_connect(*codes, timestamps=ts_iter):
             resp = req.get_response(self.app)
@@ -774,7 +775,7 @@ class TestReplicatedObjController(BaseObjectControllerMixin,
         ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
         test_indexes = [None] + [int(p) for p in POLICIES]
         for policy_index in test_indexes:
-            put_timestamp = ts.next().internal
+            put_timestamp = next(ts).internal
             req = swob.Request.blank(
                 '/v1/a/c/o', method='PUT', headers={
                     'Content-Length': 0,
@@ -794,7 +795,7 @@ class TestReplicatedObjController(BaseObjectControllerMixin,
         ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
         test_indexes = [None] + [int(p) for p in POLICIES]
         for policy_index in test_indexes:
-            put_timestamp = ts.next().internal
+            put_timestamp = next(ts).internal
             req = swob.Request.blank(
                 '/v1/a/c/o', method='PUT', headers={
                     'Content-Length': 0,
@@ -939,8 +940,7 @@ class TestECObjController(BaseObjectControllerMixin, unittest.TestCase):
     def test_GET_simple_x_newest(self):
         req = swift.common.swob.Request.blank('/v1/a/c/o',
                                               headers={'X-Newest': 'true'})
-        codes = [200] * self.replicas()
-        codes += [404] * self.obj_ring.max_more_nodes
+        codes = [200] * self.policy.ec_ndata
         with set_http_connect(*codes):
             resp = req.get_response(self.app)
         self.assertEquals(resp.status_int, 200)
@@ -976,7 +976,8 @@ class TestECObjController(BaseObjectControllerMixin, unittest.TestCase):
 
         node_fragments = zip(*fragment_payloads)
         self.assertEqual(len(node_fragments), self.replicas())  # sanity
-        responses = [(200, ''.join(node_fragments[i]), {})
+        headers = {'X-Object-Sysmeta-Ec-Content-Length': str(len(real_body))}
+        responses = [(200, ''.join(node_fragments[i]), headers)
                      for i in range(POLICIES.default.ec_ndata)]
         status_codes, body_iter, headers = zip(*responses)
         with set_http_connect(*status_codes, body_iter=body_iter,
@@ -1260,8 +1261,7 @@ class TestECObjController(BaseObjectControllerMixin, unittest.TestCase):
                                                   'X-Copy-From': 'c2/o'})
 
         # c2 get
-        codes = [200] * self.replicas()
-        codes += [404] * self.obj_ring.max_more_nodes
+        codes = [404, 200] * self.policy.ec_ndata
         headers = {
             'X-Object-Sysmeta-Ec-Content-Length': 0,
         }
@@ -1318,9 +1318,11 @@ class TestECObjController(BaseObjectControllerMixin, unittest.TestCase):
         ec_archive_bodies1 = self._make_ec_archive_bodies(test_data1)
         ec_archive_bodies2 = self._make_ec_archive_bodies(test_data2)
 
-        headers1 = {'X-Object-Sysmeta-Ec-Etag': etag1}
+        headers1 = {'X-Object-Sysmeta-Ec-Etag': etag1,
+                    'X-Object-Sysmeta-Ec-Content-Length': '333'}
         # here we're going to *lie* and say the etag here matches
-        headers2 = {'X-Object-Sysmeta-Ec-Etag': etag1}
+        headers2 = {'X-Object-Sysmeta-Ec-Etag': etag1,
+                    'X-Object-Sysmeta-Ec-Content-Length': '333'}
 
         responses1 = [(200, body, headers1)
                       for body in ec_archive_bodies1]
@@ -1441,7 +1443,7 @@ class TestECObjController(BaseObjectControllerMixin, unittest.TestCase):
         # swap out some with regular fast responses
         number_of_fast_responses_needed_to_be_quick_enough = 2
         fast_indexes = random.sample(
-            xrange(self.replicas()),
+            range(self.replicas()),
             number_of_fast_responses_needed_to_be_quick_enough)
         for i in fast_indexes:
             codes[i] = 201

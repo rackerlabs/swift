@@ -98,7 +98,7 @@ def build_dir_tree(start_path, tree_obj):
         for obj in tree_obj:
             build_dir_tree(start_path, obj)
     if isinstance(tree_obj, dict):
-        for dir_name, obj in tree_obj.iteritems():
+        for dir_name, obj in tree_obj.items():
             dir_path = os.path.join(start_path, dir_name)
             os.mkdir(dir_path)
             build_dir_tree(dir_path, obj)
@@ -115,7 +115,7 @@ def build_tar_tree(tar, start_path, tree_obj, base_path=''):
         for obj in tree_obj:
             build_tar_tree(tar, start_path, obj, base_path=base_path)
     if isinstance(tree_obj, dict):
-        for dir_name, obj in tree_obj.iteritems():
+        for dir_name, obj in tree_obj.items():
             dir_path = os.path.join(start_path, dir_name)
             tar_info = tarfile.TarInfo(dir_path[len(base_path):])
             tar_info.type = tarfile.DIRTYPE
@@ -713,7 +713,7 @@ class TestDelete(unittest.TestCase):
 
         with patch.object(self.bulk, 'max_deletes_per_request', 9):
             with patch.object(self.bulk, 'max_path_length', 1):
-                req_body = '\n'.join([str(i) for i in xrange(10)])
+                req_body = '\n'.join([str(i) for i in range(10)])
                 req = Request.blank('/delete_works/AUTH_Acc', body=req_body)
                 self.assertRaises(
                     HTTPException, self.bulk.get_objs_to_delete, req)
