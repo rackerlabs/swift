@@ -1,3 +1,10 @@
+hummingbird (0.1.17) precise; urgency=low
+
+  * d9f509d go: fix expecttransport memory usage
+  * 3d42143 go: make replicateDevice more defensive
+
+ -- David Goetz <david.goetz@rackspace.com>  Fri, 31 Jul 2015 00:01:00 +0000
+
 hummingbird (0.1.16) precise; urgency=low
 
   * e596cab fixing 'not running' in init scripts
