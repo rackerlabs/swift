@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -60,6 +61,7 @@ type Replicator struct {
 	partRateTicker *time.Ticker
 	timePerPart    time.Duration
 	concurrencySem chan struct{}
+	debugAddress   string
 
 	/* stats accounting */
 	startTime                                    time.Time
@@ -548,11 +550,13 @@ func (r *Replicator) run(c <-chan time.Time) {
 
 // Run a single replication pass.
 func (r *Replicator) Run() {
+	go http.ListenAndServe(r.debugAddress, nil)
 	r.run(OneTimeChan())
 }
 
 // Run replication passes in a loop until forever.
 func (r *Replicator) RunForever() {
+	go http.ListenAndServe(r.debugAddress, nil)
 	r.run(time.Tick(RunForeverInterval))
 }
 
@@ -572,6 +576,7 @@ func NewReplicator(conf string) (hummingbird.Daemon, error) {
 	replicator.checkMounts = serverconf.GetBool("object-replicator", "mount_check", true)
 	replicator.driveRoot = serverconf.GetDefault("object-replicator", "devices", "/srv/node")
 	replicator.port = int(serverconf.GetInt("object-replicator", "bind_port", 6000))
+	replicator.debugAddress = serverconf.GetDefault("object-replicator", "go_debug_address", "127.0.0.1:7070")
 	replicator.logger = hummingbird.SetupLogger(serverconf.GetDefault("object-replicator", "log_facility", "LOG_LOCAL0"), "object-replicator")
 	if serverconf.GetBool("object-replicator", "vm_test_mode", false) {
 		replicator.timePerPart = time.Duration(serverconf.GetInt("object-replicator", "ms_per_part", 2000)) * time.Millisecond
