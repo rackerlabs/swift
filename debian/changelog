@@ -1,6 +1,6 @@
-hummingbird (0.1.11.1) precise; urgency=low
+hummingbird (0.1.18) precise; urgency=low
 
-  * b6a30f2 adding profiler into 0.1.11
+  * b6a30f2 adding profiler into 0.1.18
 
  -- David Goetz <david.goetz@rackspace.com>  Thu, 06 Aug 2015 00:00:00 +0000
 
