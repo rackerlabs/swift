@@ -1,3 +1,21 @@
+hummingbird (0.1.18) precise; urgency=low
+
+  * e4b9726 Merge remote-tracking branch 'origin/feature/hummingbird' into hummingbird_production
+  * c1cd26b go: replicator rewrite
+  * 15bd9f0 Merge "go: fix timing issue in ring test" into feature/hummingbird
+  * 92d18dd Merge "go: add ability to lock device/drive with file on file system" into feature/hummingbird
+  * 021740a go: fix timing issue in ring test
+  * 63acd4d Merge "go: make replicateDevice more defensive" into feature/hummingbird
+  * d9f509d go: fix expecttransport memory usage
+  * 3d42143 go: make replicateDevice more defensive
+  * 82fb8e8 Merge "go: wait for availability on REPLICATE" into feature/hummingbird
+  * ed8e03e Merge "go: allow profiling" into feature/hummingbird
+  * c2f6585 Merge "go: goroutine leak" into feature/hummingbird
+  * 856429c go: goroutine leak
+  * f18b456 go: allow profiling
+
+ -- Michael Barton <michael.barton@rackspace.com>  Tue, 18 Aug 2015 00:01:00 +0000
+
 hummingbird (0.1.17) precise; urgency=low
 
   * d9f509d go: fix expecttransport memory usage
