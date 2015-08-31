@@ -1,3 +1,9 @@
+hummingbird (0.1.19) precise; urgency=low
+
+  * 834d202 go: replicator fix
+
+ -- Michael Barton <michael.barton@rackspace.com>  Mon, 31 Aug 2015 00:01:00 +0000
+
 hummingbird (0.1.18) precise; urgency=low
 
   * e4b9726 Merge remote-tracking branch 'origin/feature/hummingbird' into hummingbird_production
