@@ -1,3 +1,9 @@
+hummingbird (0.1.21) precise; urgency=low
+
+  * d7519ef go: replicator log time spent getting remote hashes
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 09 Sep 2015 00:02:00 +0000
+
 hummingbird (0.1.20) precise; urgency=low
 
   * fd593e1 go: assign startTime to Now at beginning of replication run
