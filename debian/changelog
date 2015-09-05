@@ -1,3 +1,11 @@
+hummingbird (0.1.20) precise; urgency=low
+
+  * fd593e1 go: assign startTime to Now at beginning of replication run
+  * a081541 go: add a couple timers to see about GetHashes vrs Sync time
+  * f82bcf3 go: improve replication logging
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 09 Sep 2015 00:01:00 +0000
+
 hummingbird (0.1.19) precise; urgency=low
 
   * 834d202 go: replicator fix
