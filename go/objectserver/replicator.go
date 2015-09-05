@@ -65,11 +65,11 @@ type Replicator struct {
 	partitions     []string
 
 	/* stats accounting */
-	startTime                                    time.Time
-	replicationCount, jobCount                   uint64
-	replicationCountIncrement, jobCountIncrement chan uint64
-	partitionTimes                               sort.Float64Slice
-	partitionTimesAdd                            chan float64
+	startTime                                                     time.Time
+	replicationCount, jobCount, dataTransferred, filesTransferred uint64
+	replicationCountIncrement, jobCountIncrement, dataTransferAdd chan uint64
+	partitionTimes                                                sort.Float64Slice
+	partitionTimesAdd                                             chan float64
 }
 
 func (r *Replicator) LogError(format string, args ...interface{}) {
@@ -272,6 +272,7 @@ func (r *Replicator) syncFile(objFile string, dst []*syncFileArg) (syncs int, in
 		sfa.conn.Flush()
 		if sfa.conn.RecvMessage(&fur) == nil {
 			if fur.Success {
+				r.dataTransferAdd <- uint64(fileSize)
 				syncs++
 				insync++
 			}
@@ -301,6 +302,8 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 		return
 	}
 
+	startGetHashes := time.Now()
+
 	recalc := []string{}
 	hashes, herr := GetHashes(r.driveRoot, j.dev.Device, j.partition, recalc, r)
 	if herr != nil {
@@ -320,6 +323,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 		r.LogError("[replicateLocal] error recalculating local hashes: %v", herr)
 		return
 	}
+	timeGetHashes := float64(time.Now().Sub(startGetHashes)) / float64(time.Second)
 
 	objFiles, err := listObjFiles(path, func(suffix string) bool {
 		for _, remoteHash := range remoteHashes {
@@ -332,6 +336,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 	if err != nil {
 		r.LogError("[listObjFiles] %v", err)
 	}
+	startSyncing := time.Now()
 	for _, objFile := range objFiles {
 		toSync := make([]*syncFileArg, 0)
 		suffix := filepath.Base(filepath.Dir(filepath.Dir(objFile)))
@@ -350,8 +355,9 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 			return
 		}
 	}
+	timeSyncing := float64(time.Now().Sub(startSyncing)) / float64(time.Second)
 	if syncCount > 0 {
-		r.LogInfo("[replicateLocal] Partition %s synced %d files", path, syncCount)
+		r.LogInfo("[replicateLocal] Partition %s synced %d files (%.2fs / %.2fs)", path, syncCount, timeGetHashes, timeSyncing)
 	}
 }
 
@@ -481,6 +487,9 @@ func (r *Replicator) replicateDevice(dev *hummingbird.Device) {
 func (r *Replicator) statsReporter(c <-chan time.Time) {
 	for {
 		select {
+		case dt := <-r.dataTransferAdd:
+			r.dataTransferred += dt
+			r.filesTransferred += 1
 		case jobs := <-r.jobCountIncrement:
 			r.jobCount += jobs
 		case replicates := <-r.replicationCountIncrement:
@@ -512,16 +521,23 @@ func (r *Replicator) statsReporter(c <-chan time.Time) {
 					r.partitionTimes[len(r.partitionTimes)-1], r.partitionTimes[0],
 					r.partitionTimes[len(r.partitionTimes)/2])
 			}
+			if r.dataTransferred > 0 {
+				r.LogInfo("Data synced: %d (%.2f kbps), files synced: %d",
+					r.dataTransferred, (float64(r.dataTransferred)/1024.0)*8.0, r.filesTransferred)
+			}
 		}
 	}
 }
 
 // Run replication passes of the whole server until c is closed.
 func (r *Replicator) run(c <-chan time.Time) {
-	for r.startTime = range c {
+	for _ = range c {
 		r.partitionTimes = nil
 		r.jobCount = 0
 		r.replicationCount = 0
+		r.dataTransferred = 0
+		r.filesTransferred = 0
+		r.startTime = time.Now()
 		statsTicker := time.NewTicker(StatsReportInterval)
 		go r.statsReporter(statsTicker.C)
 
@@ -574,7 +590,10 @@ func (r *Replicator) RunForever() {
 
 func NewReplicator(conf string, flags *flag.FlagSet) (hummingbird.Daemon, error) {
 	replicator := &Replicator{
-		partitionTimesAdd: make(chan float64), replicationCountIncrement: make(chan uint64), jobCountIncrement: make(chan uint64),
+		partitionTimesAdd:         make(chan float64),
+		replicationCountIncrement: make(chan uint64),
+		jobCountIncrement:         make(chan uint64),
+		dataTransferAdd:           make(chan uint64),
 	}
 	hashPathPrefix, hashPathSuffix, err := hummingbird.GetHashPrefixAndSuffix()
 	if err != nil {
