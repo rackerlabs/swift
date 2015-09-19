@@ -1,3 +1,12 @@
+hummingbird (0.1.22) precise; urgency=low
+
+  * 7682d47 go: add a way to terminate replication cleanly
+  * 8eb0f64 go: make BeginReplication concurrent
+  * 01a6a06 go: change dir permissions to what swift does
+  * d3f568f go: use recon diskusage so you can weed out unmounted drives
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon, 21 Sep 2015 00:02:00 +0000
+
 hummingbird (0.1.21) precise; urgency=low
 
   * d7519ef go: replicator log time spent getting remote hashes
