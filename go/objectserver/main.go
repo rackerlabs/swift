@@ -323,7 +323,7 @@ func (server *ObjectServer) ObjPutHandler(writer http.ResponseWriter, request *h
 	WriteMetadata(tempFile.Fd(), metadata)
 	tempFile.Sync()
 	tempFile.Close()
-	if os.MkdirAll(hashDir, 0770) != nil || os.Rename(tempFile.Name(), fileName) != nil {
+	if os.MkdirAll(hashDir, 0755) != nil || os.Rename(tempFile.Name(), fileName) != nil {
 		hummingbird.GetLogger(request).LogError("Error renaming object file: %s -> %s", tempFile.Name(), fileName)
 		hummingbird.StandardResponse(writer, http.StatusInternalServerError)
 		return
@@ -432,7 +432,7 @@ func (server *ObjectServer) ObjDeleteHandler(writer http.ResponseWriter, request
 	WriteMetadata(tempFile.Fd(), metadata)
 	tempFile.Sync()
 	tempFile.Close()
-	if os.MkdirAll(hashDir, 0770) != nil || os.Rename(tempFile.Name(), fileName) != nil {
+	if os.MkdirAll(hashDir, 0755) != nil || os.Rename(tempFile.Name(), fileName) != nil {
 		hummingbird.GetLogger(request).LogError("Error renaming tombstone file: %s -> %s", tempFile.Name(), fileName)
 		hummingbird.StandardResponse(writer, http.StatusInternalServerError)
 		return
@@ -464,6 +464,8 @@ func (server *ObjectServer) ObjReplicateHandler(writer http.ResponseWriter, requ
 	writer.WriteHeader(http.StatusOK)
 	writer.Write(hummingbird.PickleDumps(hashes))
 }
+
+var replicationDone = fmt.Errorf("Replication done")
 
 func (server *ObjectServer) ObjRepConnHandler(writer http.ResponseWriter, request *http.Request) {
 	var conn net.Conn
@@ -518,6 +520,9 @@ func (server *ObjectServer) ObjRepConnHandler(writer http.ResponseWriter, reques
 			if err := rc.RecvMessage(&sfr); err != nil {
 				return err
 			}
+			if sfr.Done {
+				return replicationDone
+			}
 			fileName := filepath.Join(server.driveRoot, sfr.Path)
 			hashDir := filepath.Dir(fileName)
 
@@ -559,7 +564,7 @@ func (server *ObjectServer) ObjRepConnHandler(writer http.ResponseWriter, reques
 				return err
 			}
 			tempFile.Sync()
-			if os.MkdirAll(hashDir, 0770) != nil || os.Rename(tempFile.Name(), fileName) != nil {
+			if os.MkdirAll(hashDir, 0755) != nil || os.Rename(tempFile.Name(), fileName) != nil {
 				return rc.SendMessage(FileUploadResponse{Msg: "upload failed"})
 			}
 			if dataFile != "" || metaFile != "" {
@@ -569,7 +574,9 @@ func (server *ObjectServer) ObjRepConnHandler(writer http.ResponseWriter, reques
 			err = rc.SendMessage(FileUploadResponse{Success: true, Msg: "YAY"})
 			return err
 		}()
-		if err != nil {
+		if err == replicationDone {
+			return
+		} else if err != nil {
 			hummingbird.GetLogger(request).LogError("[ObjRepConnHandler] Error replicating: %v", err)
 			writer.WriteHeader(http.StatusInternalServerError)
 			return
@@ -738,6 +745,16 @@ func GetServer(conf string, flags *flag.FlagSet) (bindIP string, bindPort int, s
 	deviceLockUpdateSeconds := serverconf.GetInt("app:object-server", "device_lock_update_seconds", 0)
 	if deviceLockUpdateSeconds > 0 {
 		go server.updateDeviceLocks(deviceLockUpdateSeconds)
+	}
+
+	statsdHost := serverconf.GetDefault("app:object-server", "log_statsd_host", "")
+	if statsdHost != "" {
+		statsdPort := serverconf.GetInt("app:object-server", "log_statsd_port", 8125)
+		// Go metrics collection pause interval in seconds
+		statsdPause := serverconf.GetInt("app:object-server", "statsd_collection_pause", 10)
+		basePrefix := serverconf.GetDefault("app:object-server", "log_statsd_metric_prefix", "")
+		prefix := basePrefix + ".go.objectserver"
+		go hummingbird.CollectRuntimeMetrics(statsdHost, statsdPort, statsdPause, prefix)
 	}
 
 	return bindIP, bindPort, server, server.logger, nil
