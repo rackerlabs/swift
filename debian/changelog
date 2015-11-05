@@ -1,3 +1,10 @@
+hummingbird (0.1.23) precise; urgency=low
+
+  * 7c9fc6d go: CopyN that re-uses buffers
+  * 9d3d2dc go: pass vars to container update
+
+ -- David Goetz <david.goetz@rackspace.com>  Fri, 06 Nov 2015 00:02:00 +0000
+
 hummingbird (0.1.22) precise; urgency=low
 
   * 7682d47 go: add a way to terminate replication cleanly
