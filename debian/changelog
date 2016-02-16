@@ -1,3 +1,10 @@
+hummingbird (0.1.24) precise; urgency=low
+
+  * 5d5cdbf go: fix requests with X-If-Delete-At for objects without X-Delete-At header
+  * 40d60b4 go: fix problem with using single config file
+
+ -- Nadeem Syed <nadeem.syed@rackspace.com>  Thu, 10 Dec 2015 00:02:00 +0000
+
 hummingbird (0.1.23) precise; urgency=low
 
   * 7c9fc6d go: CopyN that re-uses buffers
