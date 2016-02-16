@@ -1,3 +1,16 @@
+hummingbird (0.1.25) precise; urgency=low
+
+  * eede389 go: fix requests with Range header for 0-bytes files
+  * 73558d1 go: GREP middleware
+  * 9398163 go: fix some range parsing problems
+  * a978e86 go: multipart writer that matches swift
+  * 655c3fb Make replicator check for lock_device
+  * af3be0a allow bench to have insecure auth cert
+  * 75c5660 de able to specify drives in direct bench
+  * 45e48e0 go: fix requests with X-If-Delete-At for objects without X-Delete-At header
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 16 Feb 2016 00:02:00 +0000
+
 hummingbird (0.1.24) precise; urgency=low
 
   * 5d5cdbf go: fix requests with X-If-Delete-At for objects without X-Delete-At header
