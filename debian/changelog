@@ -1,3 +1,15 @@
+hummingbird (0.1.26) precise; urgency=low
+
+  * 9e61f59 go: fix tmp dir locations
+  * b1188ae go: add quorum delete to replicator
+  * e6c428c go: O_TMPFILE
+  * bdfc707 go: increase default ms_per_part
+  * 35ec05b go: replication prioritizer
+  * 19dae52 go: make error log when creating asyncs
+  * a357c53 go: proxyserver small fixes
+
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 10 Mar 2016 00:02:00 +0000
+
 hummingbird (0.1.25) precise; urgency=low
 
   * eede389 go: fix requests with Range header for 0-bytes files
