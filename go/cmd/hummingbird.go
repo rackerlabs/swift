@@ -85,7 +85,7 @@ func findConfig(name string) string {
 	return ""
 }
 
-func StartServer(name string) {
+func StartServer(name string, args ...string) {
 	_, err := GetProcess(name)
 	if err == nil {
 		fmt.Println("Found already running", name, "server")
@@ -110,7 +110,7 @@ func StartServer(name string) {
 		return
 	}
 
-	cmd := exec.Command(serverExecutable, name, "-d", "-c", serverConf)
+	cmd := exec.Command(serverExecutable, append([]string{name, "-d", "-c", serverConf}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if uint32(os.Getuid()) != uid { // This is goofy.
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uid, Gid: gid}
@@ -133,7 +133,7 @@ func StartServer(name string) {
 	fmt.Println(strings.Title(name), "server started.")
 }
 
-func StopServer(name string) {
+func StopServer(name string, args ...string) {
 	process, err := GetProcess(name)
 	if err != nil {
 		fmt.Println("Error finding", name, "server process:", err)
@@ -145,7 +145,7 @@ func StopServer(name string) {
 	fmt.Println(strings.Title(name), "server stopped.")
 }
 
-func RestartServer(name string) {
+func RestartServer(name string, args ...string) {
 	process, err := GetProcess(name)
 	if err == nil {
 		process.Signal(syscall.SIGTERM)
@@ -155,10 +155,10 @@ func RestartServer(name string) {
 		fmt.Println(strings.Title(name), "server not found.")
 	}
 	RemovePid(name)
-	StartServer(name)
+	StartServer(name, args...)
 }
 
-func GracefulRestartServer(name string) {
+func GracefulRestartServer(name string, args ...string) {
 	process, err := GetProcess(name)
 	if err == nil {
 		process.Signal(syscall.SIGINT)
@@ -168,10 +168,10 @@ func GracefulRestartServer(name string) {
 		fmt.Println(strings.Title(name), "server not found.")
 	}
 	RemovePid(name)
-	StartServer(name)
+	StartServer(name, args...)
 }
 
-func GracefulShutdownServer(name string) {
+func GracefulShutdownServer(name string, args ...string) {
 	process, err := GetProcess(name)
 	if err != nil {
 		fmt.Println("Error finding", name, "server process:", err)
@@ -182,7 +182,7 @@ func GracefulShutdownServer(name string) {
 	fmt.Println(strings.Title(name), "server graceful shutdown began.")
 }
 
-func ProcessControlCommand(serverCommand func(name string)) {
+func ProcessControlCommand(serverCommand func(name string, args ...string)) {
 	if !hummingbird.Exists("/var/run/hummingbird") {
 		err := os.MkdirAll("/var/run/hummingbird", 0600)
 		if err != nil {
@@ -199,7 +199,7 @@ func ProcessControlCommand(serverCommand func(name string)) {
 
 	switch flag.Arg(1) {
 	case "proxy", "object", "object-replicator", "object-auditor":
-		serverCommand(flag.Arg(1))
+		serverCommand(flag.Arg(1), flag.Args()[2:]...)
 	case "all":
 		for _, server := range []string{"proxy", "object", "object-replicator", "object-auditor"} {
 			serverCommand(server)
@@ -235,6 +235,7 @@ func main() {
 	}
 
 	objectReplicatorFlags := flag.NewFlagSet("object replicator", flag.ExitOnError)
+	objectReplicatorFlags.Bool("q", false, "Quorum Delete. Will delete handoff node if pushed to #replicas/2 + 1 nodes.")
 	objectReplicatorFlags.Bool("d", false, "Close stdio once the daemon is running")
 	objectReplicatorFlags.String("c", findConfig("object"), "Config file/directory to use")
 	objectReplicatorFlags.Bool("once", false, "Run one pass of the replicator")
@@ -279,6 +280,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\n")
 		proxyFlags.Usage()
 		fmt.Fprintf(os.Stderr, "\n")
+		fmt.Fprintf(os.Stderr, "hummingbird moveparts [old ring.gz] [new ring.gz]\n")
+		fmt.Fprintf(os.Stderr, "  Prioritize replication for moving partitions after a ring change\n\n")
+		fmt.Fprintf(os.Stderr, "hummingbird restoredevice [ip] [device-name]\n")
+		fmt.Fprintf(os.Stderr, "  Reconstruct a device from its peers\n\n")
 		fmt.Fprintf(os.Stderr, "hummingbird bench CONFIG\n")
 		fmt.Fprintf(os.Stderr, "  Run bench tool\n\n")
 		fmt.Fprintf(os.Stderr, "hummingbird dbench CONFIG\n")
@@ -325,6 +330,10 @@ func main() {
 		bench.RunDBench(flag.Args()[1:])
 	case "thrash":
 		bench.RunThrash(flag.Args()[1:])
+	case "moveparts":
+		objectserver.MoveParts(flag.Args()[1:])
+	case "restoredevice":
+		objectserver.RestoreDevice(flag.Args()[1:])
 	default:
 		flag.Usage()
 	}

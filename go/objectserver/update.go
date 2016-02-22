@@ -90,6 +90,7 @@ func (server *ObjectServer) sendContainerUpdate(host, device, method, partition,
 func (server *ObjectServer) saveAsync(method, account, container, obj, localDevice string, headers http.Header) {
 	hash := server.hashPath(account, container, obj)
 	asyncFile := filepath.Join(server.driveRoot, localDevice, "async_pending", hash[29:32], hash+"-"+headers.Get("X-Timestamp"))
+	tempDir := filepath.Join(server.driveRoot, localDevice, "tmp")
 	data := map[string]interface{}{
 		"op":        method,
 		"account":   account,
@@ -98,7 +99,12 @@ func (server *ObjectServer) saveAsync(method, account, container, obj, localDevi
 		"headers":   headerToMap(headers),
 	}
 	if os.MkdirAll(filepath.Dir(asyncFile), 0755) == nil {
-		hummingbird.WriteFileAtomic(asyncFile, hummingbird.PickleDumps(data), 0660)
+		writer, err := NewAtomicFileWriter(tempDir, asyncFile)
+		if err == nil {
+			defer writer.Abandon()
+			writer.Write(hummingbird.PickleDumps(data))
+			writer.Save()
+		}
 	}
 }
 
@@ -123,6 +129,7 @@ func (server *ObjectServer) updateContainer(metadata map[string]string, request 
 	failures := 0
 	for index := range hosts {
 		if !server.sendContainerUpdate(hosts[index], devices[index], request.Method, partition, vars["account"], vars["container"], vars["obj"], requestHeaders) {
+			hummingbird.GetLogger(request).LogError("ERROR container update failed with %s/%s (saving for async update later)", hosts[index], devices[index])
 			failures++
 		}
 	}
@@ -158,6 +165,7 @@ func (server *ObjectServer) updateDeleteAt(request *http.Request, deleteAtStr st
 	failures := 0
 	for index := range hosts {
 		if !server.sendContainerUpdate(hosts[index], devices[index], request.Method, partition, deleteAtAccount, container, obj, requestHeaders) {
+			hummingbird.GetLogger(request).LogError("ERROR container update failed with %s/%s (saving for async update later)", hosts[index], devices[index])
 			failures++
 		}
 	}

@@ -17,6 +17,7 @@ package objectserver
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -389,6 +390,47 @@ func TestReplicationHandoff(t *testing.T) {
 	require.Equal(t, 200, resp.StatusCode)
 }
 
+func TestReplicationHandoffQuorumDelete(t *testing.T) {
+	ts, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts.Close()
+
+	ts2, err := makeObjectServer()
+	assert.Nil(t, err)
+	defer ts2.Close()
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:%d/sda/0/a/c/o", ts.host, ts.port),
+		bytes.NewBuffer([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+	assert.Nil(t, err)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Length", "26")
+	req.Header.Set("X-Timestamp", hummingbird.GetTimestamp())
+	resp, err := http.DefaultClient.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, 201, resp.StatusCode)
+
+	ldev := &hummingbird.Device{ReplicationIp: ts.host, ReplicationPort: ts.port, Device: "sda"}
+	rdev := &hummingbird.Device{ReplicationIp: ts2.host, ReplicationPort: ts2.port, Device: "sda"}
+	flags := flag.NewFlagSet("hbird flags", flag.ContinueOnError)
+	flags.Bool("q", false, "boolean value")
+	flags.Parse([]string{})
+	replicator := makeReplicatorWithFlags([]string{"bind_port", fmt.Sprintf("%d", ts.port)}, flags)
+	require.False(t, replicator.quorumDelete)
+
+	flags.Parse([]string{"-q"})
+	replicator = makeReplicatorWithFlags([]string{"bind_port", fmt.Sprintf("%d", ts.port)}, flags)
+	require.True(t, replicator.quorumDelete)
+	replicator.driveRoot = ts.objServer.driveRoot
+	replicator.Ring = &FakeRepRing2{ldev: ldev, rdev: rdev}
+	replicator.Run()
+
+	req, err = http.NewRequest("HEAD", fmt.Sprintf("http://%s:%d/sda/0/a/c/o", ts2.host, ts2.port), nil)
+	assert.Nil(t, err)
+	resp, err = http.DefaultClient.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+}
+
 func TestListObjFiles(t *testing.T) {
 	dir, err := ioutil.TempDir("", "")
 	require.Nil(t, err)
@@ -414,4 +456,50 @@ func TestListObjFiles(t *testing.T) {
 	files, err = listObjFiles(filepath.Join(dir, "objects", "1"), func(string) bool { return true })
 	require.False(t, hummingbird.Exists(filepath.Join(dir, "objects", "1")))
 	require.True(t, hummingbird.Exists(filepath.Join(dir, "objects")))
+}
+
+func TestPriorityRepHandler(t *testing.T) {
+	t.Parallel()
+	driveRoot := setupDirectory()
+	defer os.RemoveAll(driveRoot)
+	replicator := makeReplicator("bind_port", "1234", "check_mounts", "no")
+	replicator.driveRoot = driveRoot
+	w := httptest.NewRecorder()
+	job := &PriorityRepJob{
+		JobType:    "handoff",
+		Partition:  1,
+		FromDevice: &hummingbird.Device{Id: 1, Device: "sda", Ip: "127.0.0.1", Port: 5000, ReplicationIp: "127.0.0.1", ReplicationPort: 5000},
+		ToDevices: []*hummingbird.Device{
+			&hummingbird.Device{Id: 2, Device: "sdb"},
+		},
+	}
+	jsonned, _ := json.Marshal(job)
+	req, _ := http.NewRequest("POST", "/priorityrep", bytes.NewBuffer(jsonned))
+	go func() {
+		replicator.priorityRepHandler(w, req)
+		require.EqualValues(t, 200, w.Code)
+	}()
+	pri := <-replicator.getPriRepChan(1)
+	require.Equal(t, "handoff", pri.JobType)
+}
+
+func TestPriorityRepHandler404(t *testing.T) {
+	t.Parallel()
+	driveRoot := setupDirectory()
+	defer os.RemoveAll(driveRoot)
+	replicator := makeReplicator("bind_port", "1234", "check_mounts", "no")
+	replicator.driveRoot = driveRoot
+	w := httptest.NewRecorder()
+	job := &PriorityRepJob{
+		JobType:    "handoff",
+		Partition:  0,
+		FromDevice: &hummingbird.Device{Id: 1, Device: "sda", Ip: "127.0.0.1", Port: 5000, ReplicationIp: "127.0.0.1", ReplicationPort: 5000},
+		ToDevices: []*hummingbird.Device{
+			&hummingbird.Device{Id: 2, Device: "sdb"},
+		},
+	}
+	jsonned, _ := json.Marshal(job)
+	req, _ := http.NewRequest("POST", "/priorityrep", bytes.NewBuffer(jsonned))
+	replicator.priorityRepHandler(w, req)
+	require.EqualValues(t, 404, w.Code)
 }
