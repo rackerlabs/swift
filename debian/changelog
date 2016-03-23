@@ -1,3 +1,15 @@
+hummingbird (0.1.27) precise; urgency=low
+
+  * 0e1730b go: add ability to dump goroutines stacktrace with SIGABRT
+  * 34db46d go: fix O_TMPFILE compilation on older OS
+  * ddbefd4 go: fix O_TMPFILE for existing files
+  * 2183bf9 go: fix tmp dir locations
+  * e6c428c go: O_TMPFILE
+  * bdfc707 go: increase default ms_per_part
+  * 35ec05b go: replication prioritizer
+
+ -- Greg Lange <glange@rackspace.com>  Tue, 22 Mar 2016 20:08:47 +0000
+
 hummingbird (0.1.26) precise; urgency=low
 
   * 9e61f59 go: fix tmp dir locations
