@@ -1,3 +1,10 @@
+hummingbird (0.1.29) precise; urgency=low
+
+  * cbb5ab5 go: fix not returning after 507
+  * 05c87db go: make object reclaim age configurable
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 05 Apr 2016 00:02:00 +0000
+
 hummingbird (0.1.28) precise; urgency=low
 
   * bd8a923 go: fix the async logger
