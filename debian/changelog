@@ -1,3 +1,13 @@
+hummingbird (0.1.30) precise; urgency=low
+
+  * 507976d go: extra detail in replication error log
+  * 991015b go: shuffle GetNodes
+  * d326728 go: ObjectEngine abstraction layer
+  * c26f521 go: hummingbird rescueparts
+  * 31c1ea7 go: end-user client
+
+ -- David Goetz <david.goetz@rackspace.com>  Thu, 05 May 2016 00:02:00 +0000
+
 hummingbird (0.1.29) precise; urgency=low
 
   * cbb5ab5 go: fix not returning after 507
