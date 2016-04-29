@@ -62,6 +62,10 @@ func (r *FakeRing) GetNodes(partition uint64) (response []*hummingbird.Device) {
 	return nil
 }
 
+func (r *FakeRing) GetNodesInOrder(partition uint64) (response []*hummingbird.Device) {
+	return nil
+}
+
 func (r *FakeRing) GetJobNodes(partition uint64, localDevice int) (response []*hummingbird.Device, handoff bool) {
 	return nil, false
 }
@@ -72,6 +76,10 @@ func (r *FakeRing) GetPartition(account string, container string, object string)
 
 func (r *FakeRing) LocalDevices(localPort int) (devs []*hummingbird.Device, err error) {
 	return nil, nil
+}
+
+func (r *FakeRing) AllDevices() (devs []hummingbird.Device) {
+	return nil
 }
 
 func (r *FakeRing) GetMoreNodes(partition uint64) hummingbird.MoreNodes {
@@ -376,6 +384,12 @@ func TestReplicationHandoff(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, 201, resp.StatusCode)
 
+	req, err = http.NewRequest("HEAD", fmt.Sprintf("http://%s:%d/sda/0/a/c/o", ts.host, ts.port), nil)
+	assert.Nil(t, err)
+	resp, err = http.DefaultClient.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+
 	ldev := &hummingbird.Device{ReplicationIp: ts.host, ReplicationPort: ts.port, Device: "sda"}
 	rdev := &hummingbird.Device{ReplicationIp: ts2.host, ReplicationPort: ts2.port, Device: "sda"}
 	replicator := makeReplicator("bind_port", fmt.Sprintf("%d", ts.port))
@@ -388,6 +402,12 @@ func TestReplicationHandoff(t *testing.T) {
 	resp, err = http.DefaultClient.Do(req)
 	require.Nil(t, err)
 	require.Equal(t, 200, resp.StatusCode)
+
+	req, err = http.NewRequest("HEAD", fmt.Sprintf("http://%s:%d/sda/0/a/c/o", ts.host, ts.port), nil)
+	assert.Nil(t, err)
+	resp, err = http.DefaultClient.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, 404, resp.StatusCode)
 }
 
 func TestReplicationHandoffQuorumDelete(t *testing.T) {
@@ -466,7 +486,6 @@ func TestPriorityRepHandler(t *testing.T) {
 	replicator.driveRoot = driveRoot
 	w := httptest.NewRecorder()
 	job := &PriorityRepJob{
-		JobType:    "handoff",
 		Partition:  1,
 		FromDevice: &hummingbird.Device{Id: 1, Device: "sda", Ip: "127.0.0.1", Port: 5000, ReplicationIp: "127.0.0.1", ReplicationPort: 5000},
 		ToDevices: []*hummingbird.Device{
@@ -480,7 +499,7 @@ func TestPriorityRepHandler(t *testing.T) {
 		require.EqualValues(t, 200, w.Code)
 	}()
 	pri := <-replicator.getPriRepChan(1)
-	require.Equal(t, "handoff", pri.JobType)
+	require.Equal(t, "1", strconv.FormatUint(pri.Partition, 10))
 }
 
 func TestPriorityRepHandler404(t *testing.T) {
@@ -491,7 +510,6 @@ func TestPriorityRepHandler404(t *testing.T) {
 	replicator.driveRoot = driveRoot
 	w := httptest.NewRecorder()
 	job := &PriorityRepJob{
-		JobType:    "handoff",
 		Partition:  0,
 		FromDevice: &hummingbird.Device{Id: 1, Device: "sda", Ip: "127.0.0.1", Port: 5000, ReplicationIp: "127.0.0.1", ReplicationPort: 5000},
 		ToDevices: []*hummingbird.Device{

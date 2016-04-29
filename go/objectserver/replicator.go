@@ -62,7 +62,6 @@ func (n *NoMoreNodes) Next() *hummingbird.Device {
 }
 
 type PriorityRepJob struct {
-	JobType    string                `json:"job_type"`
 	Partition  uint64                `json:"partition"`
 	FromDevice *hummingbird.Device   `json:"from_device"`
 	ToDevices  []*hummingbird.Device `json:"to_devices"`
@@ -289,16 +288,25 @@ func (r *Replicator) syncFile(objFile string, dst []*syncFileArg) (syncs int, in
 	var totalRead int64
 	for length, err = fp.Read(scratch); err == nil; length, err = fp.Read(scratch) {
 		totalRead += int64(length)
-		for _, sfa := range wrs {
-			sfa.conn.Write(scratch[0:length])
+		for index, sfa := range wrs {
+			if sfa == nil {
+				continue
+			}
+			if _, err := sfa.conn.Write(scratch[0:length]); err != nil {
+				r.LogError("Failed to write to remoteDevice: %d, %v", sfa.dev.Id, err)
+				wrs[index] = nil
+			}
 		}
 	}
 	if totalRead != fileSize {
-		return 0, 0, fmt.Errorf("Failed to read the full file.")
+		return 0, 0, fmt.Errorf("Failed to read the full file: %s, %v", objFile, err)
 	}
 
 	// get file upload results
 	for _, sfa := range wrs {
+		if sfa == nil {
+			continue
+		}
 		var fur FileUploadResponse
 		sfa.conn.Flush()
 		if sfa.conn.RecvMessage(&fur) == nil {
@@ -649,14 +657,24 @@ func (r *Replicator) processPriorityJobs(id int) {
 					partition: strconv.FormatUint(pri.Partition, 10),
 					objPath:   filepath.Join(r.driveRoot, pri.FromDevice.Device, "objects"),
 				}
+				_, handoff := r.Ring.GetJobNodes(pri.Partition, pri.FromDevice.Id)
 				partStart := time.Now()
 				defer func() {
 					<-r.concurrencySem
 					r.partitionTimesAdd <- float64(time.Since(partStart)) / float64(time.Second)
 				}()
-				if pri.JobType == "handoff" {
+				toDevicesArr := make([]string, len(pri.ToDevices))
+				for i, s := range pri.ToDevices {
+					toDevicesArr[i] = fmt.Sprintf("%s:%d/%s", s.Ip, s.Port, s.Device)
+				}
+				jobType := "local"
+				if handoff {
+					jobType = "handoff"
+				}
+				r.LogInfo("PriorityReplicationJob. Partition: %d as %s from %s to %s", pri.Partition, jobType, pri.FromDevice.Device, strings.Join(toDevicesArr, ","))
+				if handoff {
 					r.replicateHandoff(j, pri.ToDevices)
-				} else if pri.JobType == "local" {
+				} else {
 					r.replicateLocal(j, pri.ToDevices, &NoMoreNodes{})
 				}
 			}()
@@ -684,7 +702,7 @@ func (r *Replicator) priorityRepHandler(w http.ResponseWriter, req *http.Request
 		w.WriteHeader(500)
 		return
 	}
-	if err := json.Unmarshal(data, &pri); err != nil || pri.JobType == "" {
+	if err := json.Unmarshal(data, &pri); err != nil {
 		w.WriteHeader(400)
 		return
 	}
