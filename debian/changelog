@@ -1,3 +1,10 @@
+hummingbird (0.1.31) precise; urgency=low
+
+  * c663016 go: hashes.invalid
+  * d314c67 go: adding a x-trans-id to repconn along with the sender device id
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 10 May 2016 00:02:00 +0000
+
 hummingbird (0.1.30) precise; urgency=low
 
   * 507976d go: extra detail in replication error log
