@@ -1,3 +1,9 @@
+hummingbird (0.1.32) precise; urgency=low
+
+  * 70ea923 go: shuffle suffix dirs when replicating a partition
+
+ -- David Goetz <david.goetz@rackspace.com>  Mon, 16 May 2016 00:02:00 +0000
+
 hummingbird (0.1.31) precise; urgency=low
 
   * c663016 go: hashes.invalid
