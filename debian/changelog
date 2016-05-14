@@ -1,3 +1,11 @@
+hummingbird (0.1.33) precise; urgency=low
+
+  * 7b7cea6 go: make listObjFiles return files as it finds them
+  * 9be450c go: have replicateDevice go routine loop per device
+  * ca9591d go: conf.d support + some refactoring
+
+ -- David Goetz <david.goetz@rackspace.com>  Tue, 31 May 2016 00:02:00 +0000
+
 hummingbird (0.1.32) precise; urgency=low
 
   * 70ea923 go: shuffle suffix dirs when replicating a partition
