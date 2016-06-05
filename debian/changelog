@@ -1,3 +1,10 @@
+hummingbird (0.1.34) precise; urgency=low
+
+  * efb0435 go: make sure replicator picks up ring changes
+  * f6834ae go: Add tons of SAIO+Hummingbird details to readme
+
+ -- David Goetz <david.goetz@rackspace.com>  Wed, 08 Jun 2016 00:02:00 +0000
+
 hummingbird (0.1.33) precise; urgency=low
 
   * 7b7cea6 go: make listObjFiles return files as it finds them
