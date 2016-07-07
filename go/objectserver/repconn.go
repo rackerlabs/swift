@@ -50,6 +50,8 @@ type SyncFileRequest struct {
 	Path   string
 	Xattrs string
 	Size   int64
+	Check  bool
+	Ping   bool
 	Done   bool
 }
 

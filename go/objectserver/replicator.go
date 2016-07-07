@@ -279,7 +279,8 @@ type syncFileArg struct {
 	dev  *hummingbird.Device
 }
 
-func (r *Replicator) syncFile(objFile string, dst []*syncFileArg, j *job) (syncs int, insync int, err error) {
+func (r *Replicator) syncFile(objFile string, dst []*syncFileArg, j *job, handoff bool) (syncs int, insync int, err error) {
+	// TODO: parallelize the data transfer someday
 	var wrs []*syncFileArg
 	lst := strings.Split(objFile, string(os.PathSeparator))
 	relPath := filepath.Join(lst[len(lst)-5:]...)
@@ -294,15 +295,26 @@ func (r *Replicator) syncFile(objFile string, dst []*syncFileArg, j *job) (syncs
 	}
 	defer fp.Close()
 
+	// are we already going to sync to this region?
+	syncingRemoteRegion := make(map[int]bool)
+
 	// ask each server if we need to sync the file
 	for _, sfa := range dst {
 		var sfr SyncFileResponse
 		thisPath := filepath.Join(sfa.dev.Device, relPath)
-		sfa.conn.SendMessage(SyncFileRequest{Path: thisPath, Xattrs: hex.EncodeToString(xattrs), Size: fileSize})
+		sfa.conn.SendMessage(SyncFileRequest{Path: thisPath, Xattrs: hex.EncodeToString(xattrs), Size: fileSize,
+			// if we're already syncing handoffs to this remote region, just do a check
+			Check: handoff && syncingRemoteRegion[sfa.dev.Region],
+			// If we're not syncing handoffs, we don't care about the state. Just ping to keep the connection alive.
+			Ping: !handoff && syncingRemoteRegion[sfa.dev.Region],
+		})
 		if err := sfa.conn.RecvMessage(&sfr); err != nil {
 			continue
 		} else if sfr.GoAhead {
 			wrs = append(wrs, sfa)
+			if sfa.dev.Region != j.dev.Region {
+				syncingRemoteRegion[sfa.dev.Region] = true
+			}
 		} else if sfr.NewerExists {
 			insync++
 			if os.Remove(objFile) == nil {
@@ -425,13 +437,15 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 		suffix := filepath.Base(filepath.Dir(filepath.Dir(objFile)))
 		for _, dev := range nodes {
 			if rhashes, ok := remoteHashes[dev.Id]; ok && hashes[suffix] != rhashes[suffix] {
-				if remoteConnections[dev.Id].Disconnected {
-					continue
+				if !remoteConnections[dev.Id].Disconnected {
+					toSync = append(toSync, &syncFileArg{conn: remoteConnections[dev.Id], dev: dev})
 				}
-				toSync = append(toSync, &syncFileArg{conn: remoteConnections[dev.Id], dev: dev})
 			}
 		}
-		if syncs, _, err := r.syncFile(objFile, toSync, j); err == nil {
+		if len(toSync) == 0 {
+			break
+		}
+		if syncs, _, err := r.syncFile(objFile, toSync, j, false); err == nil {
 			syncCount += syncs
 		} else {
 			r.LogError("[syncFile] %v", err)
@@ -481,7 +495,10 @@ func (r *Replicator) replicateHandoff(j *job, nodes []*hummingbird.Device) {
 				toSync = append(toSync, &syncFileArg{conn: remoteConnections[dev.Id], dev: dev})
 			}
 		}
-		if syncs, insync, err := r.syncFile(objFile, toSync, j); err == nil {
+		if len(toSync) == 0 {
+			return
+		}
+		if syncs, insync, err := r.syncFile(objFile, toSync, j, true); err == nil {
 			syncCount += syncs
 
 			success := insync == len(nodes)
@@ -494,6 +511,7 @@ func (r *Replicator) replicateHandoff(j *job, nodes []*hummingbird.Device) {
 			}
 		} else {
 			r.LogError("[syncFile] %v", err)
+			return
 		}
 	}
 	for _, conn := range remoteConnections {

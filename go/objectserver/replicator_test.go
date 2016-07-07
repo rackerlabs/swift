@@ -16,6 +16,7 @@
 package objectserver
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -707,14 +708,14 @@ func TestSyncFileQuarantine(t *testing.T) {
 	j := &job{policy: 0}
 
 	require.Nil(t, os.MkdirAll(objFile, 0777)) // not a regular file
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
 
 	os.MkdirAll(hashDir, 0777) // error reading metadata
 	fp, err := os.Create(objFile)
 	require.Nil(t, err)
 	defer fp.Close()
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
 
 	os.MkdirAll(hashDir, 0777) // unparseable pickle
@@ -722,7 +723,7 @@ func TestSyncFileQuarantine(t *testing.T) {
 	defer fp.Close()
 	require.Nil(t, err)
 	RawWriteMetadata(fp.Fd(), []byte("NOT A VALID PICKLE"))
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
 
 	os.MkdirAll(hashDir, 0777) // wrong metadata type
@@ -730,7 +731,7 @@ func TestSyncFileQuarantine(t *testing.T) {
 	defer fp.Close()
 	require.Nil(t, err)
 	RawWriteMetadata(fp.Fd(), hummingbird.PickleDumps("hi"))
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
 
 	os.MkdirAll(hashDir, 0777) // unparseable content-length
@@ -741,7 +742,7 @@ func TestSyncFileQuarantine(t *testing.T) {
 		"Content-Type": "text/plain", "name": "/a/c/o", "ETag": "d41d8cd98f00b204e9800998ecf8427e",
 		"X-Timestamp": "12345.12345", "Content-Length": "X"}
 	RawWriteMetadata(fp.Fd(), hummingbird.PickleDumps(badContentLengthMetdata))
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
 
 	os.MkdirAll(hashDir, 0777) // content-length doesn't match file size
@@ -752,6 +753,211 @@ func TestSyncFileQuarantine(t *testing.T) {
 		"Content-Type": "text/plain", "name": "/a/c/o", "ETag": "d41d8cd98f00b204e9800998ecf8427e",
 		"X-Timestamp": "12345.12345", "Content-Length": "50000"}
 	RawWriteMetadata(fp.Fd(), hummingbird.PickleDumps(wrongContentLengthMetdata))
-	replicator.syncFile(objFile, nil, j)
+	replicator.syncFile(objFile, nil, j, false)
 	assert.False(t, hummingbird.Exists(hashDir))
+}
+
+func makeMultiRegionTestReplicator(t *testing.T) (string, *Replicator) {
+	t.Parallel()
+	driveRoot, err := ioutil.TempDir("", "")
+	require.Nil(t, err)
+	hashDir := filepath.Join(driveRoot, "sda", "objects", "1", "abc", "d41d8cd98f00b204e9800998ecf8427e")
+	require.Nil(t, os.MkdirAll(hashDir, 0777))
+	objFile := filepath.Join(hashDir, "123457890.12345.data")
+	fp, err := os.Create(objFile)
+	require.Nil(t, err)
+	fp.Write([]byte("XXX"))
+	wrongContentLengthMetdata := map[string]string{
+		"Content-Type": "text/plain", "name": "/a/c/o", "ETag": "bc9189406be84ec297464a514221406d",
+		"X-Timestamp": "12345.12345", "Content-Length": "3"}
+	RawWriteMetadata(fp.Fd(), hummingbird.PickleDumps(wrongContentLengthMetdata))
+	require.Nil(t, fp.Close())
+	replicator, err := makeReplicator("bind_port", "1234", "check_mounts", "no")
+	replicator.deviceProgressIncr = make(chan deviceProgress, 1000)
+	require.Nil(t, err)
+	replicator.driveRoot = driveRoot
+	return objFile, replicator
+}
+
+func TestAllDifferentRegionsSync(t *testing.T) {
+	objFile, replicator := makeMultiRegionTestReplicator(t)
+	defer os.RemoveAll(replicator.driveRoot)
+	j := &job{policy: 0, dev: &hummingbird.Device{Device: "sda", Region: 0}}
+	sfas := make([]*syncFileArg, 0)
+
+	for i := 0; i < 3; i++ {
+		repSide, srvSide := net.Pipe()
+		defer repSide.Close()
+		defer srvSide.Close()
+		sfas = append(sfas, &syncFileArg{
+			conn: &RepConn{c: repSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(repSide), bufio.NewWriter(repSide))},
+			dev: &hummingbird.Device{
+				Device: fmt.Sprintf("sda%d", i),
+				Region: i + 2,
+			},
+		})
+		go func(rc *RepConn) {
+			var sfr SyncFileRequest
+			require.Nil(t, rc.RecvMessage(&sfr))
+			require.False(t, sfr.Check)
+			require.Nil(t, rc.SendMessage(SyncFileResponse{GoAhead: true}))
+			rc.Read(make([]byte, sfr.Size))
+			require.Nil(t, rc.SendMessage(FileUploadResponse{Success: true}))
+			require.Nil(t, rc.RecvMessage(&sfr))
+			require.True(t, sfr.Done)
+		}(&RepConn{c: srvSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(srvSide), bufio.NewWriter(srvSide))})
+	}
+
+	syncs, insync, err := replicator.syncFile(objFile, sfas, j, true)
+	require.Nil(t, err)
+	require.Equal(t, 3, syncs)
+	require.Equal(t, 3, insync)
+}
+
+func TestAllSameRegionsSync(t *testing.T) {
+	objFile, replicator := makeMultiRegionTestReplicator(t)
+	defer os.RemoveAll(replicator.driveRoot)
+	j := &job{policy: 0, dev: &hummingbird.Device{Device: "sda", Region: 0}}
+	sfas := make([]*syncFileArg, 0)
+
+	for i := 0; i < 3; i++ {
+		repSide, srvSide := net.Pipe()
+		defer repSide.Close()
+		defer srvSide.Close()
+		sfas = append(sfas, &syncFileArg{
+			conn: &RepConn{c: repSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(repSide), bufio.NewWriter(repSide))},
+			dev: &hummingbird.Device{
+				Device: fmt.Sprintf("sda%d", i),
+				Region: 0,
+			},
+		})
+		go func(rc *RepConn) {
+			var sfr SyncFileRequest
+			require.Nil(t, rc.RecvMessage(&sfr))
+			require.False(t, sfr.Check)
+			require.Nil(t, rc.SendMessage(SyncFileResponse{GoAhead: true}))
+			rc.Read(make([]byte, sfr.Size))
+			require.Nil(t, rc.SendMessage(FileUploadResponse{Success: true}))
+			require.Nil(t, rc.RecvMessage(&sfr))
+			require.True(t, sfr.Done)
+		}(&RepConn{c: srvSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(srvSide), bufio.NewWriter(srvSide))})
+	}
+
+	syncs, insync, err := replicator.syncFile(objFile, sfas, j, true)
+	require.Nil(t, err)
+	require.Equal(t, 3, syncs)
+	require.Equal(t, 3, insync)
+}
+
+func TestAllOneDifferentRegionInSync(t *testing.T) {
+	objFile, replicator := makeMultiRegionTestReplicator(t)
+	defer os.RemoveAll(replicator.driveRoot)
+	j := &job{policy: 0, dev: &hummingbird.Device{Device: "sda", Region: 0}}
+	sfas := make([]*syncFileArg, 0)
+
+	for i := 0; i < 3; i++ {
+		repSide, srvSide := net.Pipe()
+		defer repSide.Close()
+		defer srvSide.Close()
+		sfas = append(sfas, &syncFileArg{
+			conn: &RepConn{c: repSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(repSide), bufio.NewWriter(repSide))},
+			dev:  &hummingbird.Device{Device: fmt.Sprintf("sda%d", i), Region: 1},
+		})
+		go func(i int, rc *RepConn) {
+			var sfr SyncFileRequest
+			require.Nil(t, rc.RecvMessage(&sfr))
+			if i == 0 {
+				require.False(t, sfr.Check)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{GoAhead: true}))
+				rc.Read(make([]byte, sfr.Size))
+				require.Nil(t, rc.SendMessage(FileUploadResponse{Success: true}))
+				require.Nil(t, rc.RecvMessage(&sfr))
+				require.True(t, sfr.Done)
+			} else {
+				require.True(t, sfr.Check)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{Exists: true}))
+			}
+		}(i, &RepConn{c: srvSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(srvSide), bufio.NewWriter(srvSide))})
+	}
+
+	syncs, insync, err := replicator.syncFile(objFile, sfas, j, true)
+	require.Nil(t, err)
+	require.Equal(t, 1, syncs)
+	require.Equal(t, 3, insync)
+}
+
+func TestAllOneDifferentRegionNotInSync(t *testing.T) {
+	objFile, replicator := makeMultiRegionTestReplicator(t)
+	defer os.RemoveAll(replicator.driveRoot)
+	j := &job{policy: 0, dev: &hummingbird.Device{Device: "sda", Region: 0}}
+	sfas := make([]*syncFileArg, 0)
+
+	for i := 0; i < 3; i++ {
+		repSide, srvSide := net.Pipe()
+		defer repSide.Close()
+		defer srvSide.Close()
+		sfas = append(sfas, &syncFileArg{
+			conn: &RepConn{c: repSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(repSide), bufio.NewWriter(repSide))},
+			dev:  &hummingbird.Device{Device: fmt.Sprintf("sda%d", i), Region: 1},
+		})
+		go func(i int, rc *RepConn) {
+			var sfr SyncFileRequest
+			require.Nil(t, rc.RecvMessage(&sfr))
+			if i == 0 {
+				require.False(t, sfr.Check)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{GoAhead: true}))
+				rc.Read(make([]byte, sfr.Size))
+				require.Nil(t, rc.SendMessage(FileUploadResponse{Success: true}))
+				require.Nil(t, rc.RecvMessage(&sfr))
+				require.True(t, sfr.Done)
+			} else {
+				require.True(t, sfr.Check)
+				require.False(t, sfr.Ping)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{Exists: false}))
+			}
+		}(i, &RepConn{c: srvSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(srvSide), bufio.NewWriter(srvSide))})
+	}
+
+	syncs, insync, err := replicator.syncFile(objFile, sfas, j, true)
+	require.Nil(t, err)
+	require.Equal(t, 1, syncs)
+	require.Equal(t, 1, insync)
+}
+
+func TestDifferentRegionNonHandoff(t *testing.T) {
+	objFile, replicator := makeMultiRegionTestReplicator(t)
+	defer os.RemoveAll(replicator.driveRoot)
+	j := &job{policy: 0, dev: &hummingbird.Device{Device: "sda", Region: 0}}
+	sfas := make([]*syncFileArg, 0)
+
+	for i := 0; i < 3; i++ {
+		repSide, srvSide := net.Pipe()
+		defer repSide.Close()
+		defer srvSide.Close()
+		sfas = append(sfas, &syncFileArg{
+			conn: &RepConn{c: repSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(repSide), bufio.NewWriter(repSide))},
+			dev:  &hummingbird.Device{Device: fmt.Sprintf("sda%d", i), Region: 1},
+		})
+		go func(i int, rc *RepConn) {
+			var sfr SyncFileRequest
+			require.Nil(t, rc.RecvMessage(&sfr))
+			if i == 0 {
+				require.False(t, sfr.Check)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{GoAhead: true}))
+				rc.Read(make([]byte, sfr.Size))
+				require.Nil(t, rc.SendMessage(FileUploadResponse{Success: true}))
+				require.Nil(t, rc.RecvMessage(&sfr))
+				require.True(t, sfr.Done)
+			} else {
+				require.True(t, sfr.Ping)
+				require.False(t, sfr.Check)
+				require.Nil(t, rc.SendMessage(SyncFileResponse{Exists: false}))
+			}
+		}(i, &RepConn{c: srvSide, Disconnected: false, rw: bufio.NewReadWriter(bufio.NewReader(srvSide), bufio.NewWriter(srvSide))})
+	}
+
+	syncs, insync, err := replicator.syncFile(objFile, sfas, j, false)
+	require.Nil(t, err)
+	require.Equal(t, 1, syncs)
+	require.Equal(t, 1, insync)
 }
