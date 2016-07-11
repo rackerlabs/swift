@@ -295,6 +295,9 @@ func (f *SwiftObjectFactory) objRepConnHandler(writer http.ResponseWriter, reque
 			if sfr.Done {
 				return "", replicationDone
 			}
+			if sfr.Ping {
+				return "ping", rc.SendMessage(SyncFileResponse{Msg: "pong"})
+			}
 			tempDir := TempDirPath(f.driveRoot, vars["device"])
 			fileName := filepath.Join(f.driveRoot, sfr.Path)
 			hashDir := filepath.Dir(fileName)
@@ -308,6 +311,9 @@ func (f *SwiftObjectFactory) objRepConnHandler(writer http.ResponseWriter, reque
 			dataFile, metaFile := ObjectFiles(hashDir)
 			if filepath.Base(fileName) < filepath.Base(dataFile) || filepath.Base(fileName) < filepath.Base(metaFile) {
 				return "newer file exists", rc.SendMessage(SyncFileResponse{NewerExists: true, Msg: "newer exists"})
+			}
+			if sfr.Check {
+				return "just check", rc.SendMessage(SyncFileResponse{Exists: false, Msg: "doesn't exist"})
 			}
 			tempFile, err := NewAtomicFileWriter(tempDir, hashDir)
 			if err != nil {
