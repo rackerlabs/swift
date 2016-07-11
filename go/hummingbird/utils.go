@@ -359,7 +359,7 @@ func StandardizeTimestamp(timestamp string) (string, error) {
 
 func IsNotDir(err error) bool {
 	if se, ok := err.(*os.SyscallError); ok {
-		return se.Err == syscall.ENOTDIR
+		return se.Err == syscall.ENOTDIR || se.Err == syscall.EINVAL
 	}
 	if se, ok := err.(*os.PathError); ok {
 		return os.IsNotExist(se)
@@ -484,13 +484,17 @@ func NewKeyedLimit(limitPerKey int64, totalLimit int64) *KeyedLimit {
 	return &KeyedLimit{limitPerKey: limitPerKey, totalLimit: totalLimit, locked: make(map[string]bool), inUse: make(map[string]int64)}
 }
 
+var configLocations = []string{"/etc/hummingbird/hummingbird.conf", "/etc/swift/swift.conf"}
+
 // GetHashPrefixAndSuffix retrieves the hash path prefix and suffix from
 // the correct configs based on the environments setup. The suffix cannot
 // be nil
-func GetHashPrefixAndSuffix() (prefix string, suffix string, err error) {
-	config_locations := []string{"/etc/hummingbird/hummingbird.conf", "/etc/swift/swift.conf"}
+type getHashPrefixAndSuffixFunc func() (pfx string, sfx string, err error)
 
-	for _, loc := range config_locations {
+var GetHashPrefixAndSuffix getHashPrefixAndSuffixFunc = normalGetHashPrefixAndSuffix
+
+func normalGetHashPrefixAndSuffix() (prefix string, suffix string, err error) {
+	for _, loc := range configLocations {
 		if conf, e := LoadConfig(loc); e == nil {
 			var ok bool
 			prefix, _ = conf.Get("swift-hash", "swift_hash_path_prefix")

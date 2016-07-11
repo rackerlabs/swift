@@ -216,7 +216,7 @@ func TestUrlencode(t *testing.T) {
 }
 
 func TestIsMount(t *testing.T) {
-	isMount, err := IsMount("/proc")
+	isMount, err := IsMount("/dev")
 	assert.Nil(t, err)
 	assert.True(t, isMount)
 	isMount, err = IsMount(".")
@@ -273,7 +273,24 @@ func TestReadDirNames(t *testing.T) {
 	assert.Equal(t, fileNames, []string{"X", "Y", "Z"})
 }
 
+func fakeHashPrefixAndSuffix() (filename string, err error) {
+	var config_source []byte = []byte(
+		"[swift-hash]\n" +
+			"swift_hash_path_suffix = 983abc1de3ff4258\n")
+	tempFile, err := ioutil.TempFile("", "swift.conf-")
+	if err != nil {
+		return "", err
+	}
+	ioutil.WriteFile(tempFile.Name(), config_source, 0600)
+	configLocations = []string{tempFile.Name()}
+	return tempFile.Name(), nil
+}
+
 func TestGetHashPrefixAndSuffix(t *testing.T) {
+	swift_conf_name, err := fakeHashPrefixAndSuffix()
+	assert.Nil(t, err)
+	defer os.Remove(swift_conf_name)
+
 	_, suffix, err := GetHashPrefixAndSuffix()
 	assert.Nil(t, err, "Error getting hash path prefix or suffix")
 

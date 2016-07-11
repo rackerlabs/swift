@@ -19,7 +19,6 @@ import (
 	"bufio"
 	"crypto/md5"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -28,10 +27,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/openstack/swift/go/hummingbird"
+	"github.com/openstack/swift/go/xattr"
 )
 
 const METADATA_CHUNK_SIZE = 65536
@@ -50,14 +49,22 @@ type AtomicFileWriter interface {
 	Preallocate(int64, int64) error
 }
 
-func GetXAttr(fileNameOrFd interface{}, attr string, value []byte) (int, error) {
-	switch v := fileNameOrFd.(type) {
-	case string:
-		return syscall.Getxattr(v, attr, value)
-	case uintptr:
-		return hummingbird.FGetXattr(v, attr, value)
+func PolicyDir(policy int) string {
+	if policy == 0 {
+		return "objects"
 	}
-	return 0, &hummingbird.BackendError{Err: errors.New("Invalid fileNameOrFd"), Code: hummingbird.UnhandledError}
+	return fmt.Sprintf("objects-%d", policy)
+}
+
+func UnPolicyDir(dir string) (int, error) {
+	if dir == "objects" {
+		return 0, nil
+	}
+	var policy int
+	if n, err := fmt.Sscanf(dir, "objects-%d", &policy); n == 1 && err == nil {
+		return policy, nil
+	}
+	return 0, fmt.Errorf("Unable to parse policy from dir")
 }
 
 func RawReadMetadata(fileNameOrFd interface{}) ([]byte, error) {
@@ -72,7 +79,7 @@ func RawReadMetadata(fileNameOrFd interface{}) ([]byte, error) {
 			metadataName = "user.swift.metadata" + strconv.Itoa(index)
 		}
 		// get size of xattr
-		length, err := GetXAttr(fileNameOrFd, metadataName, nil)
+		length, err := xattr.Getxattr(fileNameOrFd, metadataName, nil)
 		if err != nil || length <= 0 {
 			break
 		}
@@ -81,7 +88,7 @@ func RawReadMetadata(fileNameOrFd interface{}) ([]byte, error) {
 			pickledMetadata = append(pickledMetadata, 0)
 		}
 		pickledMetadata = pickledMetadata[0 : offset+length]
-		if _, err := GetXAttr(fileNameOrFd, metadataName, pickledMetadata[offset:]); err != nil {
+		if _, err := xattr.Getxattr(fileNameOrFd, metadataName, pickledMetadata[offset:]); err != nil {
 			return nil, err
 		}
 		offset += length
@@ -126,7 +133,7 @@ func RawWriteMetadata(fd uintptr, buf []byte) error {
 		if len(buf) < writelen {
 			writelen = len(buf)
 		}
-		if _, err := hummingbird.FSetXattr(fd, metadataName, buf[0:writelen]); err != nil {
+		if _, err := xattr.Setxattr(fd, metadataName, buf[0:writelen]); err != nil {
 			return err
 		}
 		buf = buf[writelen:len(buf)]
@@ -141,14 +148,14 @@ func WriteMetadata(fd uintptr, v map[string]string) error {
 func QuarantineHash(hashDir string) error {
 	// FYI- this does not invalidate the hash like swift's version. Please
 	// do that yourself
-	hash := filepath.Base(hashDir)
-	//          drive        objects      partition    suffix       hash
-	driveDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(hashDir))))
-	// TODO: this will need to be slightly more complicated once policies
-	quarantineDir := filepath.Join(driveDir, "quarantined", "objects")
+	//          objects      partition    suffix       hash
+	objsDir := filepath.Dir(filepath.Dir(filepath.Dir(hashDir)))
+	driveDir := filepath.Dir(objsDir)
+	quarantineDir := filepath.Join(driveDir, "quarantined", filepath.Base(objsDir))
 	if err := os.MkdirAll(quarantineDir, 0755); err != nil {
 		return err
 	}
+	hash := filepath.Base(hashDir)
 	destDir := filepath.Join(quarantineDir, hash+"-"+hummingbird.UUID())
 	if err := os.Rename(hashDir, destDir); err != nil {
 		return err
@@ -262,8 +269,8 @@ func RecalculateSuffixHash(suffixDir string, reclaimAge int64) (string, *humming
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func GetHashes(driveRoot string, device string, partition string, recalculate []string, reclaimAge int64, logger hummingbird.LoggingContext) (map[string]string, *hummingbird.BackendError) {
-	partitionDir := filepath.Join(driveRoot, device, "objects", partition)
+func GetHashes(driveRoot string, device string, partition string, recalculate []string, reclaimAge int64, policy int, logger hummingbird.LoggingContext) (map[string]string, *hummingbird.BackendError) {
+	partitionDir := filepath.Join(driveRoot, device, PolicyDir(policy), partition)
 	pklFile := filepath.Join(partitionDir, "hashes.pkl")
 	invalidFile := filepath.Join(partitionDir, "hashes.invalid")
 
@@ -318,7 +325,7 @@ func GetHashes(driveRoot string, device string, partition string, recalculate []
 	for suffix, hash := range hashes {
 		if hash == "" {
 			modified = true
-			suffixDir := driveRoot + "/" + device + "/objects/" + partition + "/" + suffix
+			suffixDir := filepath.Join(partitionDir, suffix)
 			recalc_hash, err := RecalculateSuffixHash(suffixDir, reclaimAge)
 			if err == nil {
 				hashes[suffix] = recalc_hash
@@ -351,18 +358,18 @@ func GetHashes(driveRoot string, device string, partition string, recalculate []
 			}
 			logger.LogError("Made recursive call to GetHashes: %s", partitionDir)
 			partitionLock.Close()
-			return GetHashes(driveRoot, device, partition, recalculate, reclaimAge, logger)
+			return GetHashes(driveRoot, device, partition, recalculate, reclaimAge, policy, logger)
 		}
 	}
 	return hashes, nil
 }
 
-func ObjHashDir(vars map[string]string, driveRoot string, hashPathPrefix string, hashPathSuffix string) string {
+func ObjHashDir(vars map[string]string, driveRoot string, hashPathPrefix string, hashPathSuffix string, policy int) string {
 	h := md5.New()
 	io.WriteString(h, hashPathPrefix+"/"+vars["account"]+"/"+vars["container"]+"/"+vars["obj"]+hashPathSuffix)
 	hexHash := hex.EncodeToString(h.Sum(nil))
 	suffix := hexHash[29:32]
-	return filepath.Join(driveRoot, vars["device"], "objects", vars["partition"], suffix, hexHash)
+	return filepath.Join(driveRoot, vars["device"], PolicyDir(policy), vars["partition"], suffix, hexHash)
 }
 
 func ObjectFiles(directory string) (string, string) {

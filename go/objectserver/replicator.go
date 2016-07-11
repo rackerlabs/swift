@@ -44,6 +44,7 @@ type job struct {
 	dev       *hummingbird.Device
 	partition string
 	objPath   string
+	policy    int
 }
 
 type ReplicationData struct {
@@ -63,6 +64,7 @@ type PriorityRepJob struct {
 	Partition  uint64                `json:"partition"`
 	FromDevice *hummingbird.Device   `json:"from_device"`
 	ToDevices  []*hummingbird.Device `json:"to_devices"`
+	Policy     int                   `json:"policy"`
 }
 
 type deviceProgress struct {
@@ -92,10 +94,10 @@ type Replicator struct {
 	bindIp         string
 	logger         hummingbird.SysLogLike
 	port           int
-	Ring           hummingbird.Ring
 	devGroup       sync.WaitGroup
 	partRateTicker *time.Ticker
 	timePerPart    time.Duration
+	LoopSleepTime  time.Duration
 	quorumDelete   bool
 	concurrencySem chan struct{}
 	devices        map[string]bool
@@ -103,6 +105,7 @@ type Replicator struct {
 	priRepChans    map[int]chan PriorityRepJob
 	priRepM        sync.Mutex
 	reclaimAge     int64
+	Rings          map[int]hummingbird.Ring
 
 	once      bool
 	cancelers map[string]chan struct{}
@@ -139,7 +142,13 @@ func OneTimeChan() chan time.Time {
 	return c
 }
 
-var quarantineFileError = fmt.Errorf("Invalid file")
+type quarantineFileError struct {
+	msg string
+}
+
+func (q quarantineFileError) Error() string {
+	return q.msg
+}
 
 func (r *Replicator) getFile(filePath string) (fp *os.File, xattrs []byte, size int64, err error) {
 	fp, err = os.Open(filePath)
@@ -153,52 +162,52 @@ func (r *Replicator) getFile(filePath string) (fp *os.File, xattrs []byte, size 
 	}()
 	finfo, err := fp.Stat()
 	if err != nil || !finfo.Mode().IsRegular() {
-		return nil, nil, 0, quarantineFileError
+		return nil, nil, 0, quarantineFileError{"not a regular file"}
 	}
 	rawxattr, err := RawReadMetadata(fp.Fd())
 	if err != nil || len(rawxattr) == 0 {
-		return nil, nil, 0, quarantineFileError
+		return nil, nil, 0, quarantineFileError{"error reading xattrs"}
 	}
 
 	// Perform a mini-audit, since it's cheap and we can potentially avoid spreading bad data around.
 	v, err := hummingbird.PickleLoads(rawxattr)
 	if err != nil {
-		return nil, nil, 0, quarantineFileError
+		return nil, nil, 0, quarantineFileError{"error unpickling xattrs"}
 	}
 	metadata, ok := v.(map[interface{}]interface{})
 	if !ok {
-		return nil, nil, 0, quarantineFileError
+		return nil, nil, 0, quarantineFileError{"invalid metadata type"}
 	}
 	for key, value := range metadata {
 		if _, ok := key.(string); !ok {
-			return nil, nil, 0, quarantineFileError
+			return nil, nil, 0, quarantineFileError{"invalid key in metadata"}
 		}
 		if _, ok := value.(string); !ok {
-			return nil, nil, 0, quarantineFileError
+			return nil, nil, 0, quarantineFileError{"invalid value in metadata"}
 		}
 	}
 	switch filepath.Ext(filePath) {
 	case ".data":
 		for _, reqEntry := range []string{"Content-Length", "Content-Type", "name", "ETag", "X-Timestamp"} {
 			if _, ok := metadata[reqEntry]; !ok {
-				return nil, nil, 0, quarantineFileError
+				return nil, nil, 0, quarantineFileError{".data missing required metadata"}
 			}
 		}
 		if contentLength, err := strconv.ParseInt(metadata["Content-Length"].(string), 10, 64); err != nil || contentLength != finfo.Size() {
-			return nil, nil, 0, quarantineFileError
+			return nil, nil, 0, quarantineFileError{"invalid content-length"}
 		}
 	case ".ts":
 		for _, reqEntry := range []string{"name", "X-Timestamp"} {
 			if _, ok := metadata[reqEntry]; !ok {
-				return nil, nil, 0, quarantineFileError
+				return nil, nil, 0, quarantineFileError{".ts missing required metadata"}
 			}
 		}
 	}
 	return fp, rawxattr, finfo.Size(), nil
 }
 
-func (r *Replicator) beginReplication(dev *hummingbird.Device, partition string, hashes bool, rChan chan ReplicationData) {
-	rc, err := NewRepConn(dev, partition)
+func (r *Replicator) beginReplication(dev *hummingbird.Device, partition string, hashes bool, policy int, rChan chan ReplicationData) {
+	rc, err := NewRepConn(dev, partition, policy)
 	if err != nil {
 		r.LogError("[beginReplication] error creating new request: %v", err)
 		rChan <- ReplicationData{dev: dev, conn: nil, hashes: nil, err: err}
@@ -275,8 +284,10 @@ func (r *Replicator) syncFile(objFile string, dst []*syncFileArg, j *job) (syncs
 	lst := strings.Split(objFile, string(os.PathSeparator))
 	relPath := filepath.Join(lst[len(lst)-5:]...)
 	fp, xattrs, fileSize, err := r.getFile(objFile)
-	if err == quarantineFileError {
-		// TODO: quarantine
+	if _, ok := err.(quarantineFileError); ok {
+		hashDir := filepath.Dir(objFile)
+		r.LogError("[syncFile] %s failed audit and is being quarantined: %s", hashDir, err.Error())
+		QuarantineHash(hashDir)
 		return 0, 0, nil
 	} else if err != nil {
 		return 0, 0, nil
@@ -356,7 +367,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 	startGetHashesRemote := time.Now()
 	rChan := make(chan ReplicationData)
 	for i := 0; i < len(nodes); i++ {
-		go r.beginReplication(nodes[i], j.partition, true, rChan)
+		go r.beginReplication(nodes[i], j.partition, true, j.policy, rChan)
 	}
 	for i := 0; i < len(nodes); i++ {
 		rData := <-rChan
@@ -366,7 +377,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 			remoteConnections[rData.dev.Id] = rData.conn
 		} else if rData.err == RepUnmountedError {
 			if nextNode := moreNodes.Next(); nextNode != nil {
-				go r.beginReplication(nextNode, j.partition, true, rChan)
+				go r.beginReplication(nextNode, j.partition, true, j.policy, rChan)
 				nodes = append(nodes, nextNode)
 			}
 		}
@@ -379,7 +390,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 	startGetHashesLocal := time.Now()
 
 	recalc := []string{}
-	hashes, herr := GetHashes(r.driveRoot, j.dev.Device, j.partition, recalc, r.reclaimAge, r)
+	hashes, herr := GetHashes(r.driveRoot, j.dev.Device, j.partition, recalc, r.reclaimAge, j.policy, r)
 	if herr != nil {
 		r.LogError("[replicateLocal] error getting local hashes: %v", herr)
 		return
@@ -392,7 +403,7 @@ func (r *Replicator) replicateLocal(j *job, nodes []*hummingbird.Device, moreNod
 			}
 		}
 	}
-	hashes, herr = GetHashes(r.driveRoot, j.dev.Device, j.partition, recalc, r.reclaimAge, r)
+	hashes, herr = GetHashes(r.driveRoot, j.dev.Device, j.partition, recalc, r.reclaimAge, j.policy, r)
 	if herr != nil {
 		r.LogError("[replicateLocal] error recalculating local hashes: %v", herr)
 		return
@@ -447,7 +458,7 @@ func (r *Replicator) replicateHandoff(j *job, nodes []*hummingbird.Device) {
 	rChan := make(chan ReplicationData)
 	nodesNeeded := len(nodes)
 	for i := 0; i < nodesNeeded; i++ {
-		go r.beginReplication(nodes[i], j.partition, false, rChan)
+		go r.beginReplication(nodes[i], j.partition, false, j.policy, rChan)
 	}
 	for i := 0; i < nodesNeeded; i++ {
 		rData := <-rChan
@@ -523,30 +534,49 @@ func (r *Replicator) replicateDevice(dev *hummingbird.Device, canceler chan stru
 	defer r.devGroup.Done()
 	var lastPassDuration time.Duration
 	for {
-		r.cleanTemp(dev)
+		time.Sleep(r.LoopSleepTime)
 		passStartTime := time.Now()
-
 		if mounted, err := hummingbird.IsMount(filepath.Join(r.driveRoot, dev.Device)); r.checkMounts && (err != nil || mounted != true) {
 			r.LogError("[replicateDevice] Drive not mounted: %s", dev.Device)
 			break
 		}
-		objPath := filepath.Join(r.driveRoot, dev.Device, "objects")
-		if fi, err := os.Stat(objPath); err != nil || !fi.Mode().IsDir() {
-			r.LogError("[replicateDevice] No objects found: %s", objPath)
+		if hummingbird.Exists(filepath.Join(r.driveRoot, dev.Device, "lock_device")) {
 			break
-		}
-		partitionList, err := filepath.Glob(filepath.Join(objPath, "[0-9]*"))
-		if err != nil {
-			r.LogError("[replicateDevice] Error getting partition list: %s (%v)", objPath, err)
-			break
-		}
-		// if one of the breaks above triggers, the monitorer should retry after ReplicateDeviceTimeout
-		for i := len(partitionList) - 1; i > 0; i-- { // shuffle partition list
-			j := rand.Intn(i + 1)
-			partitionList[j], partitionList[i] = partitionList[i], partitionList[j]
 		}
 
-		numPartitions := uint64(len(partitionList))
+		r.cleanTemp(dev)
+		jobList := make([]job, 0)
+
+		for policy := range r.Rings {
+			objPath := filepath.Join(r.driveRoot, dev.Device, PolicyDir(policy))
+			if fi, err := os.Stat(objPath); err != nil || !fi.Mode().IsDir() {
+				continue
+			}
+			policyPartitions, err := filepath.Glob(filepath.Join(objPath, "[0-9]*"))
+			if err != nil {
+				r.LogError("[replicateDevice] Error getting partition list: %s (%v)", objPath, err)
+				continue
+			}
+			for _, partition := range policyPartitions {
+				partition = filepath.Base(partition)
+				if _, ok := r.partitions[partition]; len(r.partitions) > 0 && !ok {
+					continue
+				}
+				if _, err := strconv.ParseUint(partition, 10, 64); err == nil {
+					jobList = append(jobList,
+						job{objPath: objPath,
+							partition: partition,
+							dev:       dev,
+							policy:    policy})
+				}
+			}
+		}
+
+		numPartitions := uint64(len(jobList))
+		if numPartitions == 0 {
+			r.LogError("[replicateDevice] No objects found: %s", filepath.Join(r.driveRoot, dev.Device))
+		}
+
 		partitionsProcessed := uint64(0)
 
 		r.deviceProgressPassInit <- deviceProgress{
@@ -555,10 +585,12 @@ func (r *Replicator) replicateDevice(dev *hummingbird.Device, canceler chan stru
 			LastPassDuration: lastPassDuration,
 		}
 
-		for _, partition := range partitionList {
-			if hummingbird.Exists(filepath.Join(r.driveRoot, dev.Device, "lock_device")) {
-				break
-			}
+		for i := len(jobList) - 1; i > 0; i-- { // shuffle job list
+			j := rand.Intn(i + 1)
+			jobList[j], jobList[i] = jobList[i], jobList[j]
+		}
+
+		for _, j := range jobList {
 			select {
 			case <-canceler:
 				{
@@ -572,31 +604,29 @@ func (r *Replicator) replicateDevice(dev *hummingbird.Device, canceler chan stru
 			default:
 			}
 			r.processPriorityJobs(dev.Id)
-			if _, ok := r.partitions[filepath.Base(partition)]; len(r.partitions) > 0 && !ok {
-				continue
-			}
 
-			if partitioni, err := strconv.ParseUint(filepath.Base(partition), 10, 64); err == nil {
-				func() {
-					<-r.partRateTicker.C
-					r.concurrencySem <- struct{}{}
-					r.deviceProgressIncr <- deviceProgress{
-						dev:            dev,
-						PartitionsDone: 1,
-					}
-					j := &job{objPath: objPath, partition: filepath.Base(partition), dev: dev}
-					nodes, handoff := r.Ring.GetJobNodes(partitioni, j.dev.Id)
-					defer func() {
-						<-r.concurrencySem
-					}()
-					partitionsProcessed += 1
-					if handoff {
-						r.replicateHandoff(j, nodes)
-					} else {
-						r.replicateLocal(j, nodes, r.Ring.GetMoreNodes(partitioni))
-					}
+			func() {
+				<-r.partRateTicker.C
+				r.concurrencySem <- struct{}{}
+				defer func() {
+					<-r.concurrencySem
 				}()
-			}
+				r.deviceProgressIncr <- deviceProgress{
+					dev:            dev,
+					PartitionsDone: 1,
+				}
+				partitioni, err := strconv.ParseUint(j.partition, 10, 64)
+				if err != nil {
+					return
+				}
+				nodes, handoff := r.Rings[j.policy].GetJobNodes(partitioni, j.dev.Id)
+				partitionsProcessed += 1
+				if handoff {
+					r.replicateHandoff(&j, nodes)
+				} else {
+					r.replicateLocal(&j, nodes, r.Rings[j.policy].GetMoreNodes(partitioni))
+				}
+			}()
 		}
 		if partitionsProcessed >= numPartitions {
 			r.deviceProgressIncr <- deviceProgress{
@@ -614,16 +644,22 @@ func (r *Replicator) replicateDevice(dev *hummingbird.Device, canceler chan stru
 // restartDevices should be called periodically from the statsReporter thread to make sure devices that should be replicating are.
 func (r *Replicator) restartDevices() {
 	shouldBeRunning := make(map[string]bool)
-	if localDevices, err := r.Ring.LocalDevices(r.port); err != nil {
-		r.LogError("Error getting local devices: %v", err)
-		return
-	} else {
-		// launch replication for any new devices
-		for _, dev := range localDevices {
-			shouldBeRunning[dev.Device] = true
-			if _, ok := r.deviceProgressMap[dev.Device]; !ok {
-				r.restartReplicateDevice(dev)
-			}
+	deviceMap := map[string]*hummingbird.Device{}
+	for _, ring := range r.Rings {
+		devices, err := ring.LocalDevices(r.port)
+		if err != nil {
+			r.LogError("Error getting local devices: %v", err)
+			return
+		}
+		for _, dev := range devices {
+			deviceMap[dev.Device] = dev
+		}
+	}
+	// launch replication for any new devices
+	for _, dev := range deviceMap {
+		shouldBeRunning[dev.Device] = true
+		if _, ok := r.deviceProgressMap[dev.Device]; !ok {
+			r.restartReplicateDevice(dev)
 		}
 	}
 	// kill any replicators that are no longer in the ring
@@ -746,12 +782,18 @@ func (r *Replicator) run() {
 
 	r.partRateTicker = time.NewTicker(r.timePerPart)
 	r.concurrencySem = make(chan struct{}, r.concurrency)
-	localDevices, err := r.Ring.LocalDevices(r.port)
-	if err != nil {
-		r.LogError("Error getting local devices: %v", err)
-		return
+	deviceMap := map[string]*hummingbird.Device{}
+	for _, ring := range r.Rings {
+		devices, err := ring.LocalDevices(r.port)
+		if err != nil {
+			r.LogError("Error getting local devices: %v", err)
+			return
+		}
+		for _, dev := range devices {
+			deviceMap[dev.Device] = dev
+		}
 	}
-	for _, dev := range localDevices {
+	for _, dev := range deviceMap {
 		if _, ok := r.devices[dev.Device]; ok || len(r.devices) == 0 {
 			r.restartReplicateDevice(dev)
 		}
@@ -776,8 +818,9 @@ func (r *Replicator) processPriorityJobs(id int) {
 					dev:       pri.FromDevice,
 					partition: strconv.FormatUint(pri.Partition, 10),
 					objPath:   filepath.Join(r.driveRoot, pri.FromDevice.Device, "objects"),
+					policy:    pri.Policy,
 				}
-				_, handoff := r.Ring.GetJobNodes(pri.Partition, pri.FromDevice.Id)
+				_, handoff := r.Rings[pri.Policy].GetJobNodes(pri.Partition, pri.FromDevice.Id)
 				defer func() {
 					<-r.concurrencySem
 				}()
@@ -904,10 +947,20 @@ func NewReplicator(serverconf hummingbird.Config, flags *flag.FlagSet) (hummingb
 		partitions:             make(map[string]bool),
 		cancelers:              make(map[string]chan struct{}),
 		once:                   false,
+		LoopSleepTime:          5 * time.Second,
 	}
 	hashPathPrefix, hashPathSuffix, err := hummingbird.GetHashPrefixAndSuffix()
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get hash prefix and suffix")
+	}
+	replicator.Rings = make(map[int]hummingbird.Ring)
+	for _, policy := range hummingbird.LoadPolicies() {
+		if policy.Type != "replication" {
+			continue
+		}
+		if replicator.Rings[policy.Index], err = hummingbird.GetRing("object", hashPathPrefix, hashPathSuffix, policy.Index); err != nil {
+			return nil, fmt.Errorf("Unable to load ring.")
+		}
 	}
 	replicator.reconCachePath = serverconf.GetDefault("object-auditor", "recon_cache_path", "/var/cache/swift")
 	replicator.checkMounts = serverconf.GetBool("object-replicator", "mount_check", true)
@@ -924,9 +977,6 @@ func NewReplicator(serverconf hummingbird.Config, flags *flag.FlagSet) (hummingb
 		replicator.timePerPart = time.Duration(serverconf.GetInt("object-replicator", "ms_per_part", 750)) * time.Millisecond
 	}
 	replicator.concurrency = int(serverconf.GetInt("object-replicator", "concurrency", 1))
-	if replicator.Ring, err = hummingbird.GetRing("object", hashPathPrefix, hashPathSuffix); err != nil {
-		return nil, fmt.Errorf("Unable to load ring.")
-	}
 	devices_flag := flags.Lookup("devices")
 	if devices_flag != nil {
 		if devices := devices_flag.Value.(flag.Getter).Get().(string); len(devices) > 0 {
