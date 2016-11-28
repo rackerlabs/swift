@@ -15,15 +15,16 @@
 
 import json
 import mock
-from StringIO import StringIO
 import unittest
 from urllib import quote
 import zlib
 from textwrap import dedent
 import os
 
+import six
+from six import StringIO
+from six.moves import range
 from test.unit import FakeLogger
-import eventlet
 from eventlet.green import urllib2
 from swift.common import internal_client
 from swift.common import swob
@@ -38,7 +39,7 @@ def not_sleep(seconds):
 
 
 def unicode_string(start, length):
-    return u''.join([unichr(x) for x in xrange(start, start + length)])
+    return u''.join([six.unichr(x) for x in range(start, start + length)])
 
 
 def path_parts():
@@ -235,19 +236,20 @@ class TestInternalClient(unittest.TestCase):
         write_fake_ring(object_ring_path)
         with patch_policies([StoragePolicy(0, 'legacy', True)]):
             client = internal_client.InternalClient(conf_path, 'test', 1)
-        self.assertEqual(client.account_ring, client.app.app.app.account_ring)
-        self.assertEqual(client.account_ring.serialized_path,
-                         account_ring_path)
-        self.assertEqual(client.container_ring,
-                         client.app.app.app.container_ring)
-        self.assertEqual(client.container_ring.serialized_path,
-                         container_ring_path)
-        object_ring = client.app.app.app.get_object_ring(0)
-        self.assertEqual(client.get_object_ring(0),
-                         object_ring)
-        self.assertEqual(object_ring.serialized_path,
-                         object_ring_path)
-        self.assertEquals(client.auto_create_account_prefix, '-')
+            self.assertEqual(client.account_ring,
+                             client.app.app.app.account_ring)
+            self.assertEqual(client.account_ring.serialized_path,
+                             account_ring_path)
+            self.assertEqual(client.container_ring,
+                             client.app.app.app.container_ring)
+            self.assertEqual(client.container_ring.serialized_path,
+                             container_ring_path)
+            object_ring = client.app.app.app.get_object_ring(0)
+            self.assertEqual(client.get_object_ring(0),
+                             object_ring)
+            self.assertEqual(object_ring.serialized_path,
+                             object_ring_path)
+            self.assertEquals(client.auto_create_account_prefix, '-')
 
     def test_init(self):
         class App(object):
@@ -332,6 +334,24 @@ class TestInternalClient(unittest.TestCase):
 
         self.assertEquals(3, client.sleep_called)
         self.assertEquals(4, client.tries)
+
+    def test_base_request_timeout(self):
+        # verify that base_request passes timeout arg on to urlopen
+        body = {"some": "content"}
+
+        class FakeConn(object):
+            def read(self):
+                return json.dumps(body)
+
+        for timeout in (0.0, 42.0, None):
+            mocked_func = 'swift.common.internal_client.urllib2.urlopen'
+            with mock.patch(mocked_func) as mock_urlopen:
+                mock_urlopen.side_effect = [FakeConn()]
+                sc = internal_client.SimpleClient('http://0.0.0.0/')
+                _, resp_body = sc.base_request('GET', timeout=timeout)
+                mock_urlopen.assert_called_once_with(mock.ANY, timeout=timeout)
+                # sanity check
+                self.assertEquals(body, resp_body)
 
     def test_make_request_method_path_headers(self):
         class InternalClient(internal_client.InternalClient):
@@ -556,7 +576,7 @@ class TestInternalClient(unittest.TestCase):
 
         exp_items = []
         responses = []
-        for i in xrange(3):
+        for i in range(3):
             data = [
                 {'name': 'item%02d' % (2 * i)},
                 {'name': 'item%02d' % (2 * i + 1)}]
@@ -1244,48 +1264,109 @@ class TestSimpleClient(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 2)
         self.assertEqual([None, None], retval)
 
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_request_with_retries_with_HTTPError(self, mock_urlopen):
+        mock_response = mock.MagicMock()
+        mock_response.read.return_value = ''
+        c = internal_client.SimpleClient(url='http://127.0.0.1', token='token')
+        self.assertEqual(c.retries, 5)
+
+        for request_method in 'GET PUT POST DELETE HEAD COPY'.split():
+            mock_urlopen.reset_mock()
+            mock_urlopen.side_effect = urllib2.HTTPError(*[None] * 5)
+            with mock.patch('swift.common.internal_client.sleep') \
+                    as mock_sleep:
+                self.assertRaises(urllib2.HTTPError,
+                                  c.retry_request, request_method, retries=1)
+            self.assertEqual(mock_sleep.call_count, 1)
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_request_container_with_retries_with_HTTPError(self,
+                                                           mock_urlopen):
+        mock_response = mock.MagicMock()
+        mock_response.read.return_value = ''
+        c = internal_client.SimpleClient(url='http://127.0.0.1', token='token')
+        self.assertEqual(c.retries, 5)
+
+        for request_method in 'GET PUT POST DELETE HEAD COPY'.split():
+            mock_urlopen.reset_mock()
+            mock_urlopen.side_effect = urllib2.HTTPError(*[None] * 5)
+            with mock.patch('swift.common.internal_client.sleep') \
+                    as mock_sleep:
+                self.assertRaises(urllib2.HTTPError,
+                                  c.retry_request, request_method,
+                                  container='con', retries=1)
+            self.assertEqual(mock_sleep.call_count, 1)
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_request_object_with_retries_with_HTTPError(self,
+                                                        mock_urlopen):
+        mock_response = mock.MagicMock()
+        mock_response.read.return_value = ''
+        c = internal_client.SimpleClient(url='http://127.0.0.1', token='token')
+        self.assertEqual(c.retries, 5)
+
+        for request_method in 'GET PUT POST DELETE HEAD COPY'.split():
+            mock_urlopen.reset_mock()
+            mock_urlopen.side_effect = urllib2.HTTPError(*[None] * 5)
+            with mock.patch('swift.common.internal_client.sleep') \
+                    as mock_sleep:
+                self.assertRaises(urllib2.HTTPError,
+                                  c.retry_request, request_method,
+                                  container='con', name='obj', retries=1)
+            self.assertEqual(mock_sleep.call_count, 1)
+            self.assertEqual(mock_urlopen.call_count, 2)
+
     def test_proxy(self):
-        running = True
-
-        def handle(sock):
-            while running:
-                try:
-                    with eventlet.Timeout(0.1):
-                        (conn, addr) = sock.accept()
-                except eventlet.Timeout:
-                    continue
-                else:
-                    conn.send('HTTP/1.1 503 Server Error')
-                    conn.close()
-            sock.close()
-
-        sock = eventlet.listen(('', 0))
-        port = sock.getsockname()[1]
-        proxy = 'http://127.0.0.1:%s' % port
+        # check that proxy arg is passed through to the urllib Request
+        scheme = 'http'
+        proxy_host = '127.0.0.1:80'
+        proxy = '%s://%s' % (scheme, proxy_host)
         url = 'https://127.0.0.1:1/a'
-        server = eventlet.spawn(handle, sock)
-        try:
-            headers = {'Content-Length': '0'}
-            with mock.patch('swift.common.internal_client.sleep'):
-                try:
-                    internal_client.put_object(
-                        url, container='c', name='o1', headers=headers,
-                        contents='', proxy=proxy, timeout=0.1, retries=0)
-                except urllib2.HTTPError as e:
-                    self.assertEqual(e.code, 503)
-                except urllib2.URLError as e:
-                    if 'ECONNREFUSED' in str(e):
-                        self.fail(
-                            "Got %s which probably means the http proxy "
-                            "settings were not used" % e)
-                    else:
-                        raise e
-                else:
-                    self.fail('Unexpected successful response')
-        finally:
-            running = False
-        server.wait()
 
+        class FakeConn(object):
+            def read(self):
+                return 'irrelevant'
+
+        mocked = 'swift.common.internal_client.urllib2.urlopen'
+
+        # module level methods
+        for func in (internal_client.put_object,
+                     internal_client.delete_object):
+            with mock.patch(mocked) as mock_urlopen:
+                mock_urlopen.return_value = FakeConn()
+                func(url, container='c', name='o1', contents='', proxy=proxy,
+                     timeout=0.1, retries=0)
+                self.assertEqual(1, mock_urlopen.call_count)
+                args, kwargs = mock_urlopen.call_args
+                self.assertEqual(1, len(args))
+                self.assertEqual(1, len(kwargs))
+                self.assertEqual(0.1, kwargs['timeout'])
+                self.assertTrue(isinstance(args[0], urllib2.Request))
+                self.assertEqual(proxy_host, args[0].host)
+                self.assertEqual(scheme, args[0].type)
+
+        # class methods
+        content = mock.MagicMock()
+        cl = internal_client.SimpleClient(url)
+        scenarios = ((cl.get_account, []),
+                     (cl.get_container, ['c']),
+                     (cl.put_container, ['c']),
+                     (cl.put_object, ['c', 'o', content]))
+        for scenario in scenarios:
+            with mock.patch(mocked) as mock_urlopen:
+                mock_urlopen.return_value = FakeConn()
+                scenario[0](*scenario[1], proxy=proxy, timeout=0.1)
+                self.assertEqual(1, mock_urlopen.call_count)
+                args, kwargs = mock_urlopen.call_args
+                self.assertEqual(1, len(args))
+                self.assertEqual(1, len(kwargs))
+                self.assertEqual(0.1, kwargs['timeout'])
+                self.assertTrue(isinstance(args[0], urllib2.Request))
+                self.assertEqual(proxy_host, args[0].host)
+                self.assertEqual(scheme, args[0].type)
 
 if __name__ == '__main__':
     unittest.main()

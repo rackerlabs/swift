@@ -25,6 +25,7 @@ import operator
 import os
 import pwd
 import re
+import rfc822
 import sys
 import threading as stdlib_threading
 import time
@@ -37,16 +38,14 @@ from urllib import quote as _quote
 from contextlib import contextmanager, closing
 import ctypes
 import ctypes.util
-from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
-    RawConfigParser
 from optparse import OptionParser
-from Queue import Queue, Empty
+
 from tempfile import mkstemp, NamedTemporaryFile
 try:
     import simplejson as json
 except ImportError:
     import json
-import cPickle as pickle
+import six.moves.cPickle as pickle
 import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
 import itertools
@@ -63,6 +62,10 @@ import netifaces
 import codecs
 utf8_decoder = codecs.getdecoder('utf-8')
 utf8_encoder = codecs.getencoder('utf-8')
+from six.moves.configparser import ConfigParser, NoSectionError, \
+    NoOptionError, RawConfigParser
+from six.moves.queue import Queue, Empty
+from six.moves import range
 
 from swift import gettext_ as _
 import swift.common.exceptions
@@ -226,7 +229,7 @@ def register_swift_info(name='swift', admin=False, **kwargs):
         if "." in name:
             raise ValueError('Cannot use "." in a swift_info key: %s' % name)
         dict_to_use[name] = {}
-    for key, val in kwargs.iteritems():
+    for key, val in kwargs.items():
         if "." in key:
             raise ValueError('Cannot use "." in a swift_info key: %s' % key)
         dict_to_use[name][key] = val
@@ -293,6 +296,72 @@ def config_auto_int_value(value, default):
     return value
 
 
+def append_underscore(prefix):
+    if prefix and prefix[-1] != '_':
+        prefix += '_'
+    return prefix
+
+
+def config_read_reseller_options(conf, defaults):
+    """
+    Read reseller_prefix option and associated options from configuration
+
+    Reads the reseller_prefix option, then reads options that may be
+    associated with a specific reseller prefix. Reads options such that an
+    option without a prefix applies to all reseller prefixes unless an option
+    has an explicit prefix.
+
+    :param conf: the configuration
+    :param defaults: a dict of default values. The key is the option
+                     name. The value is either an array of strings or a string
+    :return: tuple of an array of reseller prefixes and a dict of option values
+    """
+    reseller_prefix_opt = conf.get('reseller_prefix', 'AUTH').split(',')
+    reseller_prefixes = []
+    for prefix in [pre.strip() for pre in reseller_prefix_opt if pre.strip()]:
+        if prefix == "''":
+            prefix = ''
+        prefix = append_underscore(prefix)
+        if prefix not in reseller_prefixes:
+            reseller_prefixes.append(prefix)
+    if len(reseller_prefixes) == 0:
+        reseller_prefixes.append('')
+
+    # Get prefix-using config options
+    associated_options = {}
+    for prefix in reseller_prefixes:
+        associated_options[prefix] = dict(defaults)
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, '', defaults))
+        prefix_name = prefix if prefix != '' else "''"
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, prefix_name, defaults))
+    return reseller_prefixes, associated_options
+
+
+def config_read_prefixed_options(conf, prefix_name, defaults):
+    """
+    Read prefixed options from configuration
+
+    :param conf: the configuration
+    :param prefix_name: the prefix (including, if needed, an underscore)
+    :param defaults: a dict of default values. The dict supplies the
+                     option name and type (string or comma separated string)
+    :return: a dict containing the options
+    """
+    params = {}
+    for option_name in defaults.keys():
+        value = conf.get('%s%s' % (prefix_name, option_name))
+        if value:
+            if isinstance(defaults.get(option_name), list):
+                params[option_name] = []
+                for role in value.lower().split(','):
+                    params[option_name].append(role.strip())
+            else:
+                params[option_name] = value.strip()
+    return params
+
+
 def noop_libc_function(*args):
     return 0
 
@@ -331,6 +400,21 @@ def generate_trans_id(trans_id_suffix):
         uuid.uuid4().hex[:21], time.time(), quote(trans_id_suffix))
 
 
+def get_policy_index(req_headers, res_headers):
+    """
+    Returns the appropriate index of the storage policy for the request from
+    a proxy server
+
+    :param req: dict of the request headers.
+    :param res: dict of the response headers.
+
+    :returns: string index of storage policy, or None
+    """
+    header = 'X-Backend-Storage-Policy-Index'
+    policy_index = res_headers.get(header, req_headers.get(header))
+    return str(policy_index) if policy_index is not None else None
+
+
 def get_log_line(req, res, trans_time, additional_info):
     """
     Make a line for logging that matches the documented log line format
@@ -344,14 +428,15 @@ def get_log_line(req, res, trans_time, additional_info):
     :returns: a properly formated line for logging.
     """
 
-    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d' % (
+    policy_index = get_policy_index(req.headers, res.headers)
+    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d %s' % (
         req.remote_addr,
         time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
         req.method, req.path, res.status.split()[0],
         res.content_length or '-', req.referer or '-',
         req.headers.get('x-trans-id', '-'),
         req.user_agent or '-', trans_time, additional_info or '-',
-        os.getpid())
+        os.getpid(), policy_index or '-')
 
 
 def get_trans_id_time(trans_id):
@@ -378,7 +463,7 @@ class FileLikeIter(object):
 
     def next(self):
         """
-        x.next() -> the next value, or raise StopIteration
+        next(x) -> the next value, or raise StopIteration
         """
         if self.closed:
             raise ValueError('I/O operation on closed file')
@@ -387,7 +472,7 @@ class FileLikeIter(object):
             self.buf = None
             return rv
         else:
-            return self.iterator.next()
+            return next(self.iterator)
 
     def read(self, size=-1):
         """
@@ -408,7 +493,7 @@ class FileLikeIter(object):
             self.buf = None
         else:
             try:
-                chunk = self.iterator.next()
+                chunk = next(self.iterator)
             except StopIteration:
                 return ''
         if len(chunk) > size:
@@ -486,9 +571,9 @@ class FallocateWrapper(object):
             self.func_name = 'posix_fallocate'
             self.fallocate = noop_libc_function
             return
-        ## fallocate is preferred because we need the on-disk size to match
-        ## the allocated size. Older versions of sqlite require that the
-        ## two sizes match. However, fallocate is Linux only.
+        # fallocate is preferred because we need the on-disk size to match
+        # the allocated size. Older versions of sqlite require that the
+        # two sizes match. However, fallocate is Linux only.
         for func in ('fallocate', 'posix_fallocate'):
             self.func_name = func
             self.fallocate = load_libc_function(func, log_error=False)
@@ -569,6 +654,27 @@ def fdatasync(fd):
         fsync(fd)
 
 
+def fsync_dir(dirpath):
+    """
+    Sync directory entries to disk.
+
+    :param dirpath: Path to the directory to be synced.
+    """
+    dirfd = None
+    try:
+        dirfd = os.open(dirpath, os.O_DIRECTORY | os.O_RDONLY)
+        fsync(dirfd)
+    except OSError as err:
+        if err.errno == errno.ENOTDIR:
+            # Raise error if someone calls fsync_dir on a non-directory
+            raise
+        logging.warn(_("Unable to perform fsync() on directory %s: %s"),
+                     dirpath, os.strerror(err.errno))
+    finally:
+        if dirfd:
+            os.close(dirfd)
+
+
 def drop_buffer_cache(fd, offset, length):
     """
     Drop 'buffer' cache for the given range of the given file.
@@ -592,6 +698,7 @@ def drop_buffer_cache(fd, offset, length):
 NORMAL_FORMAT = "%016.05f"
 INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
 MAX_OFFSET = (16 ** 16) - 1
+PRECISION = 1e-5
 # Setting this to True will cause the internal format to always display
 # extended digits - even when the value is equivalent to the normalized form.
 # This isn't ideal during an upgrade when some servers might not understand
@@ -636,7 +743,20 @@ class Timestamp(object):
     compatible for normalized timestamps which do not include an offset.
     """
 
-    def __init__(self, timestamp, offset=0):
+    def __init__(self, timestamp, offset=0, delta=0):
+        """
+        Create a new Timestamp.
+
+        :param timestamp: time in seconds since the Epoch, may be any of:
+
+            * a float or integer
+            * normalized/internalized string
+            * another instance of this class (offset is preserved)
+
+        :param offset: the second internal offset vector, an int
+        :param delta: deca-microsecond difference from the base timestamp
+                      param, an int
+        """
         if isinstance(timestamp, basestring):
             parts = timestamp.split('_', 1)
             self.timestamp = float(parts.pop(0))
@@ -654,6 +774,14 @@ class Timestamp(object):
             raise ValueError('offset must be non-negative')
         if self.offset > MAX_OFFSET:
             raise ValueError('offset must be smaller than %d' % MAX_OFFSET)
+        self.raw = int(round(self.timestamp / PRECISION))
+        # add delta
+        if delta:
+            self.raw = self.raw + delta
+            if self.raw <= 0:
+                raise ValueError(
+                    'delta must be greater than %d' % (-1 * self.raw))
+            self.timestamp = float(self.raw * PRECISION)
 
     def __repr__(self):
         return INTERNAL_FORMAT % (self.timestamp, self.offset)
@@ -780,20 +908,66 @@ def mkdirs(path):
                 raise
 
 
-def renamer(old, new):
+def makedirs_count(path, count=0):
+    """
+    Same as os.makedirs() except that this method returns the number of
+    new directories that had to be created.
+
+    Also, this does not raise an error if target directory already exists.
+    This behaviour is similar to Python 3.x's os.makedirs() called with
+    exist_ok=True. Also similar to swift.common.utils.mkdirs()
+
+    https://hg.python.org/cpython/file/v3.4.2/Lib/os.py#l212
+    """
+    head, tail = os.path.split(path)
+    if not tail:
+        head, tail = os.path.split(head)
+    if head and tail and not os.path.exists(head):
+        count = makedirs_count(head, count)
+        if tail == os.path.curdir:
+            return
+    try:
+        os.mkdir(path)
+    except OSError as e:
+        # EEXIST may also be raised if path exists as a file
+        # Do not let that pass.
+        if e.errno != errno.EEXIST or not os.path.isdir(path):
+            raise
+    else:
+        count += 1
+    return count
+
+
+def renamer(old, new, fsync=True):
     """
     Attempt to fix / hide race conditions like empty object directories
     being removed by backend processes during uploads, by retrying.
 
+    The containing directory of 'new' and of all newly created directories are
+    fsync'd by default. This _will_ come at a performance penalty. In cases
+    where these additional fsyncs are not necessary, it is expected that the
+    caller of renamer() turn it off explicitly.
+
     :param old: old path to be renamed
     :param new: new path to be renamed to
+    :param fsync: fsync on containing directory of new and also all
+                  the newly created directories.
     """
+    dirpath = os.path.dirname(new)
     try:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
     except OSError:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
+    if fsync:
+        # If count=0, no new directories were created. But we still need to
+        # fsync leaf dir after os.rename().
+        # If count>0, starting from leaf dir, fsync parent dirs of all
+        # directories created by makedirs_count()
+        for i in range(0, count + 1):
+            fsync_dir(dirpath)
+            dirpath = os.path.dirname(dirpath)
 
 
 def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
@@ -883,7 +1057,7 @@ class RateLimitedIterator(object):
         else:
             self.running_time = ratelimit_sleep(self.running_time,
                                                 self.elements_per_second)
-        return self.iterator.next()
+        return next(self.iterator)
 
 
 class GreenthreadSafeIterator(object):
@@ -906,32 +1080,34 @@ class GreenthreadSafeIterator(object):
 
     def next(self):
         with self.semaphore:
-            return self.unsafe_iter.next()
+            return next(self.unsafe_iter)
 
 
 class NullLogger(object):
     """A no-op logger for eventlet wsgi."""
 
     def write(self, *args):
-        #"Logs" the args to nowhere
+        # "Logs" the args to nowhere
         pass
 
 
 class LoggerFileObject(object):
 
-    def __init__(self, logger):
+    def __init__(self, logger, log_type='STDOUT'):
         self.logger = logger
+        self.log_type = log_type
 
     def write(self, value):
         value = value.strip()
         if value:
             if 'Connection reset by peer' in value:
-                self.logger.error(_('STDOUT: Connection reset by peer'))
+                self.logger.error(
+                    _('%s: Connection reset by peer'), self.log_type)
             else:
-                self.logger.error(_('STDOUT: %s'), value)
+                self.logger.error(_('%s: %s'), self.log_type, value)
 
     def writelines(self, values):
-        self.logger.error(_('STDOUT: %s'), '#012'.join(values))
+        self.logger.error(_('%s: %s'), self.log_type, '#012'.join(values))
 
     def close(self):
         pass
@@ -1075,6 +1251,7 @@ class LoggingHandlerWeakRef(weakref.ref):
     Like a weak reference, but passes through a couple methods that logging
     handlers need.
     """
+
     def close(self):
         referent = self()
         try:
@@ -1266,7 +1443,7 @@ class SwiftLogFormatter(logging.Formatter):
             if self.max_line_length < 7:
                 msg = msg[:self.max_line_length]
             else:
-                approxhalf = (self.max_line_length - 5) / 2
+                approxhalf = (self.max_line_length - 5) // 2
                 msg = msg[:approxhalf] + " ... " + msg[-approxhalf:]
         return msg
 
@@ -1383,11 +1560,11 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
                 logger_hook(conf, name, log_to_console, log_route, fmt,
                             logger, adapted_logger)
             except (AttributeError, ImportError):
-                print(
-                    'Error calling custom handler [%s]' % hook,
-                    file=sys.stderr)
+                print('Error calling custom handler [%s]' % hook,
+                      file=sys.stderr)
             except ValueError:
-                print('Invalid custom handler format [%s]' % hook, sys.stderr)
+                print('Invalid custom handler format [%s]' % hook,
+                      file=sys.stderr)
 
     # Python 2.6 has the undesirable property of keeping references to all log
     # handlers around forever in logging._handlers and logging._handlerList.
@@ -1442,7 +1619,7 @@ def get_hub():
         return None
 
 
-def drop_privileges(user):
+def drop_privileges(user, call_setsid=True):
     """
     Sets the userid/groupid of the current process, get session leader, etc.
 
@@ -1455,10 +1632,11 @@ def drop_privileges(user):
     os.setgid(user[3])
     os.setuid(user[2])
     os.environ['HOME'] = user[5]
-    try:
-        os.setsid()
-    except OSError:
-        pass
+    if call_setsid:
+        try:
+            os.setsid()
+        except OSError:
+            pass
     os.chdir('/')   # in case you need to rmdir on where you started the daemon
     os.umask(0o22)  # ensure files are created with the correct privileges
 
@@ -1497,7 +1675,7 @@ def capture_stdio(logger, **kwargs):
     if kwargs.pop('capture_stdout', True):
         sys.stdout = LoggerFileObject(logger)
     if kwargs.pop('capture_stderr', True):
-        sys.stderr = LoggerFileObject(logger)
+        sys.stderr = LoggerFileObject(logger, 'STDERR')
 
 
 def parse_options(parser=None, once=False, test_args=None):
@@ -1548,12 +1726,39 @@ def parse_options(parser=None, once=False, test_args=None):
     return config, options
 
 
-def whataremyips():
+def expand_ipv6(address):
     """
-    Get the machine's ip addresses
+    Expand ipv6 address.
+    :param address: a string indicating valid ipv6 address
+    :returns: a string indicating fully expanded ipv6 address
 
+    """
+    packed_ip = socket.inet_pton(socket.AF_INET6, address)
+    return socket.inet_ntop(socket.AF_INET6, packed_ip)
+
+
+def whataremyips(bind_ip=None):
+    """
+    Get "our" IP addresses ("us" being the set of services configured by
+    one *.conf file). If our REST listens on a specific address, return it.
+    Otherwise, if listen on '0.0.0.0' or '::' return all addresses, including
+    the loopback.
+
+    :param str bind_ip: Optional bind_ip from a config file; may be IP address
+                        or hostname.
     :returns: list of Strings of ip addresses
     """
+    if bind_ip:
+        # See if bind_ip is '0.0.0.0'/'::'
+        try:
+            _, _, _, _, sockaddr = socket.getaddrinfo(
+                bind_ip, None, 0, socket.SOCK_STREAM, 0,
+                socket.AI_NUMERICHOST)[0]
+            if sockaddr[0] not in ('0.0.0.0', '::'):
+                return [bind_ip]
+        except socket.gaierror:
+            pass
+
     addresses = []
     for interface in netifaces.interfaces():
         try:
@@ -1567,7 +1772,7 @@ def whataremyips():
                     # If we have an ipv6 address remove the
                     # %ether_interface at the end
                     if family == netifaces.AF_INET6:
-                        addr = addr.split('%')[0]
+                        addr = expand_ipv6(addr.split('%')[0])
                     addresses.append(addr)
         except ValueError:
             pass
@@ -2080,13 +2285,19 @@ class GreenAsyncPile(object):
 
     Correlating results with jobs (if necessary) is left to the caller.
     """
-    def __init__(self, size):
+    def __init__(self, size_or_pool):
         """
-        :param size: size pool of green threads to use
+        :param size_or_pool: thread pool size or a pool to use
         """
-        self._pool = GreenPool(size)
+        if isinstance(size_or_pool, GreenPool):
+            self._pool = size_or_pool
+            size = self._pool.size
+        else:
+            self._pool = GreenPool(size_or_pool)
+            size = size_or_pool
         self._responses = eventlet.queue.LightQueue(size)
         self._inflight = 0
+        self._pending = 0
 
     def _run_func(self, func, args, kwargs):
         try:
@@ -2098,6 +2309,7 @@ class GreenAsyncPile(object):
         """
         Spawn a job in a green thread on the pile.
         """
+        self._pending += 1
         self._inflight += 1
         self._pool.spawn(self._run_func, func, args, kwargs)
 
@@ -2112,7 +2324,7 @@ class GreenAsyncPile(object):
         try:
             with GreenAsyncPileWaitallTimeout(timeout):
                 while True:
-                    results.append(self.next())
+                    results.append(next(self))
         except (GreenAsyncPileWaitallTimeout, StopIteration):
             pass
         return results
@@ -2122,12 +2334,13 @@ class GreenAsyncPile(object):
 
     def next(self):
         try:
-            return self._responses.get_nowait()
+            rv = self._responses.get_nowait()
         except Empty:
             if self._inflight == 0:
                 raise StopIteration()
-            else:
-                return self._responses.get()
+            rv = self._responses.get()
+        self._pending -= 1
+        return rv
 
 
 class ModifiedParseResult(ParseResult):
@@ -2395,7 +2608,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
                 if existing_entry:
                     cache_entry = json.loads(existing_entry)
             except ValueError:
-                #file doesn't have a valid entry, we'll recreate it
+                # file doesn't have a valid entry, we'll recreate it
                 pass
             for cache_key, cache_value in cache_dict.items():
                 put_recon_cache_entry(cache_entry, cache_key, cache_value)
@@ -2403,7 +2616,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
                 with NamedTemporaryFile(dir=os.path.dirname(cache_file),
                                         delete=False) as tf:
                     tf.write(json.dumps(cache_entry) + '\n')
-                os.rename(tf.name, cache_file)
+                renamer(tf.name, cache_file, fsync=False)
             finally:
                 try:
                     os.unlink(tf.name)
@@ -2490,6 +2703,10 @@ def public(func):
 
 def quorum_size(n):
     """
+    quorum size as it applies to services that use 'replication' for data
+    integrity  (Account/Container services).  Object quorum_size is defined
+    on a storage policy basis.
+
     Number of successful backend requests needed for the proxy to consider
     the client request successful.
     """
@@ -2513,6 +2730,33 @@ def rsync_ip(ip):
         return ip
     else:
         return '[%s]' % ip
+
+
+def rsync_module_interpolation(template, device):
+    """
+    Interpolate devices variables inside a rsync module template
+
+    :param template: rsync module template as a string
+    :param device: a device from a ring
+
+    :returns: a string with all variables replaced by device attributes
+    """
+    replacements = {
+        'ip': rsync_ip(device.get('ip', '')),
+        'port': device.get('port', ''),
+        'replication_ip': rsync_ip(device.get('replication_ip', '')),
+        'replication_port': device.get('replication_port', ''),
+        'region': device.get('region', ''),
+        'zone': device.get('zone', ''),
+        'device': device.get('device', ''),
+        'meta': device.get('meta', ''),
+    }
+    try:
+        module = template.format(**replacements)
+    except KeyError as e:
+        raise ValueError('Cannot interpolate rsync_module, invalid variable: '
+                         '%s' % e)
+    return module
 
 
 def get_valid_utf8_str(str_or_unicode):
@@ -2731,19 +2975,21 @@ def tpool_reraise(func, *args, **kwargs):
 
 
 class ThreadPool(object):
-    BYTE = 'a'.encode('utf-8')
-
     """
     Perform blocking operations in background threads.
 
     Call its methods from within greenlets to green-wait for results without
     blocking the eventlet reactor (hopefully).
     """
+
+    BYTE = 'a'.encode('utf-8')
+
     def __init__(self, nthreads=2):
         self.nthreads = nthreads
         self._run_queue = Queue()
         self._result_queue = Queue()
         self._threads = []
+        self._alive = True
 
         if nthreads <= 0:
             return
@@ -2768,7 +3014,7 @@ class ThreadPool(object):
         _raw_rpipe, self.wpipe = os.pipe()
         self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
 
-        for _junk in xrange(nthreads):
+        for _junk in range(nthreads):
             thr = stdlib_threading.Thread(
                 target=self._worker,
                 args=(self._run_queue, self._result_queue))
@@ -2791,6 +3037,8 @@ class ThreadPool(object):
         """
         while True:
             item = work_queue.get()
+            if item is None:
+                break
             ev, func, args, kwargs = item
             try:
                 result = func(*args, **kwargs)
@@ -2845,6 +3093,9 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             result = func(*args, **kwargs)
             sleep()
@@ -2889,10 +3140,37 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             return self._run_in_eventlet_tpool(func, *args, **kwargs)
         else:
             return self.run_in_thread(func, *args, **kwargs)
+
+    def terminate(self):
+        """
+        Releases the threadpool's resources (OS threads, greenthreads, pipes,
+        etc.) and renders it unusable.
+
+        Don't call run_in_thread() or force_run_in_thread() after calling
+        terminate().
+        """
+        self._alive = False
+        if self.nthreads <= 0:
+            return
+
+        for _junk in range(self.nthreads):
+            self._run_queue.put(None)
+        for thr in self._threads:
+            thr.join()
+        self._threads = []
+        self.nthreads = 0
+
+        greenthread.kill(self._consumer_coro)
+
+        self.rpipe.close()
+        os.close(self.wpipe)
 
 
 def ismount(path):
@@ -2944,10 +3222,52 @@ def ismount_raw(path):
     return False
 
 
+def close_if_possible(maybe_closable):
+    close_method = getattr(maybe_closable, 'close', None)
+    if callable(close_method):
+        return close_method()
+
+
+@contextmanager
+def closing_if_possible(maybe_closable):
+    """
+    Like contextlib.closing(), but doesn't crash if the object lacks a close()
+    method.
+
+    PEP 333 (WSGI) says: "If the iterable returned by the application has a
+    close() method, the server or gateway must call that method upon
+    completion of the current request[.]" This function makes that easier.
+    """
+    try:
+        yield maybe_closable
+    finally:
+        close_if_possible(maybe_closable)
+
+
 _rfc_token = r'[^()<>@,;:\"/\[\]?={}\x00-\x20\x7f]+'
 _rfc_extension_pattern = re.compile(
     r'(?:\s*;\s*(' + _rfc_token + r")\s*(?:=\s*(" + _rfc_token +
     r'|"(?:[^"\\]|\\.)*"))?)')
+
+_content_range_pattern = re.compile(r'^bytes (\d+)-(\d+)/(\d+)$')
+
+
+def parse_content_range(content_range):
+    """
+    Parse a content-range header into (first_byte, last_byte, total_size).
+
+    See RFC 7233 section 4.2 for details on the header format, but it's
+    basically "Content-Range: bytes ${start}-${end}/${total}".
+
+    :param content_range: Content-Range header value to parse,
+        e.g. "bytes 100-1249/49004"
+    :returns: 3-tuple (start, end, total)
+    :raises: ValueError if malformed
+    """
+    found = re.search(_content_range_pattern, content_range)
+    if not found:
+        raise ValueError("malformed Content-Range %r" % (content_range,))
+    return tuple(int(x) for x in found.groups())
 
 
 def parse_content_type(content_type):
@@ -2962,7 +3282,7 @@ def parse_content_type(content_type):
             ('text/plain', [('charset, 'UTF-8'), ('level', '1')])
 
     :param content_type: content_type to parse
-    :returns: a typle containing (content type, list of k, v parameter tuples)
+    :returns: a tuple containing (content type, list of k, v parameter tuples)
     """
     parm_list = []
     if ';' in content_type:
@@ -3039,7 +3359,10 @@ class _MultipartMimeFileLikeObject(object):
         if len(self.input_buffer) < length + len(self.boundary) + 2:
             to_read = length + len(self.boundary) + 2
             while to_read > 0:
-                chunk = self.wsgi_input.read(to_read)
+                try:
+                    chunk = self.wsgi_input.read(to_read)
+                except (IOError, ValueError) as e:
+                    raise swift.common.exceptions.ChunkReadError(str(e))
                 to_read -= len(chunk)
                 self.input_buffer += chunk
                 if not chunk:
@@ -3065,7 +3388,10 @@ class _MultipartMimeFileLikeObject(object):
             return ''
         boundary_pos = newline_pos = -1
         while newline_pos < 0 and boundary_pos < 0:
-            chunk = self.wsgi_input.read(self.read_chunk_size)
+            try:
+                chunk = self.wsgi_input.read(self.read_chunk_size)
+            except (IOError, ValueError) as e:
+                raise swift.common.exceptions.ChunkReadError(str(e))
             self.input_buffer += chunk
             newline_pos = self.input_buffer.find('\r\n')
             boundary_pos = self.input_buffer.find(self.boundary)
@@ -3094,7 +3420,9 @@ class _MultipartMimeFileLikeObject(object):
 def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
     """
     Given a multi-part-mime-encoded input file object and boundary,
-    yield file-like objects for each part.
+    yield file-like objects for each part. Note that this does not
+    split each part into headers and body; the caller is responsible
+    for doing that if necessary.
 
     :param wsgi_input: The file-like object to read from.
     :param boundary: The mime boundary to separate new file-like
@@ -3103,8 +3431,17 @@ def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
     :raises: MimeInvalid if the document is malformed
     """
     boundary = '--' + boundary
-    if wsgi_input.readline(len(boundary + '\r\n')).strip() != boundary:
-        raise swift.common.exceptions.MimeInvalid('invalid starting boundary')
+    blen = len(boundary) + 2  # \r\n
+    try:
+        got = wsgi_input.readline(blen)
+        while got == '\r\n':
+            got = wsgi_input.readline(blen)
+    except (IOError, ValueError) as e:
+        raise swift.common.exceptions.ChunkReadError(str(e))
+
+    if got.strip() != boundary:
+        raise swift.common.exceptions.MimeInvalid(
+            'invalid starting boundary: wanted %r, got %r', (boundary, got))
     boundary = '\r\n' + boundary
     input_buffer = ''
     done = False
@@ -3114,6 +3451,195 @@ def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
         yield it
         done = it.no_more_files
         input_buffer = it.input_buffer
+
+
+def mime_to_document_iters(input_file, boundary, read_chunk_size=4096):
+    """
+    Takes a file-like object containing a multipart MIME document and
+    returns an iterator of (headers, body-file) tuples.
+
+    :param input_file: file-like object with the MIME doc in it
+    :param boundary: MIME boundary, sans dashes
+        (e.g. "divider", not "--divider")
+    :param read_chunk_size: size of strings read via input_file.read()
+    """
+    doc_files = iter_multipart_mime_documents(input_file, boundary,
+                                              read_chunk_size)
+    for i, doc_file in enumerate(doc_files):
+        # this consumes the headers and leaves just the body in doc_file
+        headers = rfc822.Message(doc_file, 0)
+        yield (headers, doc_file)
+
+
+def maybe_multipart_byteranges_to_document_iters(app_iter, content_type):
+    """
+    Takes an iterator that may or may not contain a multipart MIME document
+    as well as content type and returns an iterator of body iterators.
+
+    :param app_iter: iterator that may contain a multipart MIME document
+    :param content_type: content type of the app_iter, used to determine
+                         whether it conains a multipart document and, if
+                         so, what the boundary is between documents
+    """
+    content_type, params_list = parse_content_type(content_type)
+    if content_type != 'multipart/byteranges':
+        yield app_iter
+        return
+
+    body_file = FileLikeIter(app_iter)
+    boundary = dict(params_list)['boundary']
+    for _headers, body in mime_to_document_iters(body_file, boundary):
+        yield (chunk for chunk in iter(lambda: body.read(65536), ''))
+
+
+def document_iters_to_multipart_byteranges(ranges_iter, boundary):
+    """
+    Takes an iterator of range iters and yields a multipart/byteranges MIME
+    document suitable for sending as the body of a multi-range 206 response.
+
+    See document_iters_to_http_response_body for parameter descriptions.
+    """
+
+    divider = "--" + boundary + "\r\n"
+    terminator = "--" + boundary + "--"
+
+    for range_spec in ranges_iter:
+        start_byte = range_spec["start_byte"]
+        end_byte = range_spec["end_byte"]
+        entity_length = range_spec.get("entity_length", "*")
+        content_type = range_spec["content_type"]
+        part_iter = range_spec["part_iter"]
+
+        part_header = ''.join((
+            divider,
+            "Content-Type: ", str(content_type), "\r\n",
+            "Content-Range: ", "bytes %d-%d/%s\r\n" % (
+                start_byte, end_byte, entity_length),
+            "\r\n"
+        ))
+        yield part_header
+
+        for chunk in part_iter:
+            yield chunk
+        yield "\r\n"
+    yield terminator
+
+
+def document_iters_to_http_response_body(ranges_iter, boundary, multipart,
+                                         logger):
+    """
+    Takes an iterator of range iters and turns it into an appropriate
+    HTTP response body, whether that's multipart/byteranges or not.
+
+    This is almost, but not quite, the inverse of
+    http_response_to_document_iters(). This function only yields chunks of
+    the body, not any headers.
+
+    :param ranges_iter: an iterator of dictionaries, one per range.
+        Each dictionary must contain at least the following key:
+        "part_iter": iterator yielding the bytes in the range
+
+        Additionally, if multipart is True, then the following other keys
+        are required:
+
+        "start_byte": index of the first byte in the range
+        "end_byte": index of the last byte in the range
+        "content_type": value for the range's Content-Type header
+
+        Finally, there is one optional key that is used in the
+            multipart/byteranges case:
+
+        "entity_length": length of the requested entity (not necessarily
+            equal to the response length). If omitted, "*" will be used.
+
+        Each part_iter will be exhausted prior to calling next(ranges_iter).
+
+    :param boundary: MIME boundary to use, sans dashes (e.g. "boundary", not
+        "--boundary").
+    :param multipart: True if the response should be multipart/byteranges,
+        False otherwise. This should be True if and only if you have 2 or
+        more ranges.
+    :param logger: a logger
+    """
+    if multipart:
+        return document_iters_to_multipart_byteranges(ranges_iter, boundary)
+    else:
+        try:
+            response_body_iter = next(ranges_iter)['part_iter']
+        except StopIteration:
+            return ''
+
+        # We need to make sure ranges_iter does not get garbage-collected
+        # before response_body_iter is exhausted. The reason is that
+        # ranges_iter has a finally block that calls close_swift_conn, and
+        # so if that finally block fires before we read response_body_iter,
+        # there's nothing there.
+        def string_along(useful_iter, useless_iter_iter, logger):
+            for x in useful_iter:
+                yield x
+
+            try:
+                next(useless_iter_iter)
+            except StopIteration:
+                pass
+            else:
+                logger.warn("More than one part in a single-part response?")
+
+        return string_along(response_body_iter, ranges_iter, logger)
+
+
+def multipart_byteranges_to_document_iters(input_file, boundary,
+                                           read_chunk_size=4096):
+    """
+    Takes a file-like object containing a multipart/byteranges MIME document
+    (see RFC 7233, Appendix A) and returns an iterator of (first-byte,
+    last-byte, length, document-headers, body-file) 5-tuples.
+
+    :param input_file: file-like object with the MIME doc in it
+    :param boundary: MIME boundary, sans dashes
+        (e.g. "divider", not "--divider")
+    :param read_chunk_size: size of strings read via input_file.read()
+    """
+    for headers, body in mime_to_document_iters(input_file, boundary,
+                                                read_chunk_size):
+        first_byte, last_byte, length = parse_content_range(
+            headers.getheader('content-range'))
+        yield (first_byte, last_byte, length, headers.items(), body)
+
+
+def http_response_to_document_iters(response, read_chunk_size=4096):
+    """
+    Takes a successful object-GET HTTP response and turns it into an
+    iterator of (first-byte, last-byte, length, headers, body-file)
+    5-tuples.
+
+    The response must either be a 200 or a 206; if you feed in a 204 or
+    something similar, this probably won't work.
+
+    :param response: HTTP response, like from bufferedhttp.http_connect(),
+        not a swob.Response.
+    """
+    if response.status == 200:
+        # Single "range" that's the whole object
+        content_length = int(response.getheader('Content-Length'))
+        return iter([(0, content_length - 1, content_length,
+                      response.getheaders(), response)])
+
+    content_type, params_list = parse_content_type(
+        response.getheader('Content-Type'))
+    if content_type != 'multipart/byteranges':
+        # Single range; no MIME framing, just the bytes. The start and end
+        # byte indices are in the Content-Range header.
+        start, end, length = parse_content_range(
+            response.getheader('Content-Range'))
+        return iter([(start, end, length, response.getheaders(), response)])
+    else:
+        # Multiple ranges; the response body is a multipart/byteranges MIME
+        # document, and we have to parse it using the MIME boundary
+        # extracted from the Content-Type header.
+        params = dict(params_list)
+        return multipart_byteranges_to_document_iters(
+            response, params['boundary'], read_chunk_size)
 
 
 #: Regular expression to match form attributes.
@@ -3133,8 +3659,8 @@ def parse_content_disposition(header):
     """
     attributes = {}
     attrs = ''
-    if '; ' in header:
-        header, attrs = header.split('; ', 1)
+    if ';' in header:
+        header, attrs = [x.strip() for x in header.split(';', 1)]
     m = True
     while m:
         m = ATTRIBUTES_RE.match(attrs)

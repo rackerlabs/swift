@@ -36,7 +36,6 @@ needs to change.
 """
 
 from collections import defaultdict
-from cStringIO import StringIO
 import UserDict
 import time
 from functools import partial
@@ -49,7 +48,11 @@ import random
 import functools
 import inspect
 
-from swift.common.utils import reiterate, split_path, Timestamp, pairs
+from six import BytesIO
+from six import StringIO
+
+from swift.common.utils import reiterate, split_path, Timestamp, pairs, \
+    close_if_possible
 from swift.common.exceptions import InvalidTimestamp
 
 
@@ -126,6 +129,20 @@ class _UTC(tzinfo):
     def tzname(self, dt):
         return 'UTC'
 UTC = _UTC()
+
+
+class WsgiBytesIO(BytesIO):
+    """
+    This class adds support for the additional wsgi.input methods defined on
+    eventlet.wsgi.Input to the BytesIO class which would otherwise be a fine
+    stand-in for the file-like object in the WSGI environment.
+    """
+
+    def set_hundred_continue_response_headers(self, headers):
+        pass
+
+    def send_hundred_continue_response(self):
+        pass
 
 
 def _datetime_property(header):
@@ -463,8 +480,8 @@ class Range(object):
     After initialization, "range.ranges" is populated with a list
     of (start, end) tuples denoting the requested ranges.
 
-    If there were any syntactically-invalid byte-range-spec values,
-    "range.ranges" will be an empty list, per the relevant RFC:
+    If there were any syntactically-invalid byte-range-spec values, the
+    constructor will raise a ValueError, per the relevant RFC:
 
     "The recipient of a byte-range-set that includes one or more syntactically
     invalid byte-range-spec values MUST ignore the header field that includes
@@ -743,16 +760,16 @@ def _req_environ_property(environ_field):
 def _req_body_property():
     """
     Set and retrieve the Request.body parameter.  It consumes wsgi.input and
-    returns the results.  On assignment, uses a StringIO to create a new
+    returns the results.  On assignment, uses a WsgiBytesIO to create a new
     wsgi.input.
     """
     def getter(self):
         body = self.environ['wsgi.input'].read()
-        self.environ['wsgi.input'] = StringIO(body)
+        self.environ['wsgi.input'] = WsgiBytesIO(body)
         return body
 
     def setter(self, value):
-        self.environ['wsgi.input'] = StringIO(value)
+        self.environ['wsgi.input'] = WsgiBytesIO(value)
         self.environ['CONTENT_LENGTH'] = str(len(value))
 
     return property(getter, setter, doc="Get and set the request body str")
@@ -820,7 +837,7 @@ class Request(object):
         :param path: encoded, parsed, and unquoted into PATH_INFO
         :param environ: WSGI environ dictionary
         :param headers: HTTP headers
-        :param body: stuffed in a StringIO and hung on wsgi.input
+        :param body: stuffed in a WsgiBytesIO and hung on wsgi.input
         :param kwargs: any environ key with an property setter
         """
         headers = headers or {}
@@ -849,18 +866,18 @@ class Request(object):
             'SERVER_PROTOCOL': 'HTTP/1.0',
             'wsgi.version': (1, 0),
             'wsgi.url_scheme': parsed_path.scheme or 'http',
-            'wsgi.errors': StringIO(''),
+            'wsgi.errors': StringIO(),
             'wsgi.multithread': False,
             'wsgi.multiprocess': False
         }
         env.update(environ)
         if body is not None:
-            env['wsgi.input'] = StringIO(body)
+            env['wsgi.input'] = WsgiBytesIO(body)
             env['CONTENT_LENGTH'] = str(len(body))
         elif 'wsgi.input' not in env:
-            env['wsgi.input'] = StringIO('')
+            env['wsgi.input'] = WsgiBytesIO()
         req = Request(env)
-        for key, val in headers.iteritems():
+        for key, val in headers.items():
             req.headers[key] = val
         for key, val in kwargs.items():
             prop = getattr(Request, key, None)
@@ -929,6 +946,10 @@ class Request(object):
             return '/' + entity_path
 
     @property
+    def is_chunked(self):
+        return 'chunked' in self.headers.get('transfer-encoding', '')
+
+    @property
     def url(self):
         "Provides the full url of the request"
         return self.host_url + self.path_qs
@@ -961,7 +982,7 @@ class Request(object):
         env.update({
             'REQUEST_METHOD': 'GET',
             'CONTENT_LENGTH': '0',
-            'wsgi.input': StringIO(''),
+            'wsgi.input': WsgiBytesIO(),
         })
         return Request(env)
 
@@ -1071,13 +1092,14 @@ def content_range_header(start, stop, size):
 
 def multi_range_iterator(ranges, content_type, boundary, size, sub_iter_gen):
     for start, stop in ranges:
-        yield ''.join(['\r\n--', boundary, '\r\n',
+        yield ''.join(['--', boundary, '\r\n',
                        'Content-Type: ', content_type, '\r\n'])
         yield content_range_header(start, stop, size) + '\r\n\r\n'
         sub_iter = sub_iter_gen(start, stop)
         for chunk in sub_iter:
             yield chunk
-    yield '\r\n--' + boundary + '--\r\n'
+        yield '\r\n'
+    yield '--' + boundary + '--'
 
 
 class Response(object):
@@ -1098,13 +1120,16 @@ class Response(object):
     app_iter = _resp_app_iter_property()
 
     def __init__(self, body=None, status=200, headers=None, app_iter=None,
-                 request=None, conditional_response=False, **kw):
+                 request=None, conditional_response=False,
+                 conditional_etag=None, **kw):
         self.headers = HeaderKeyDict(
             [('Content-Type', 'text/html; charset=UTF-8')])
         self.conditional_response = conditional_response
+        self._conditional_etag = conditional_etag
         self.request = request
         self.body = body
         self.app_iter = app_iter
+        self.response_iter = None
         self.status = status
         self.boundary = "%.32x" % random.randint(0, 256 ** 16)
         if request:
@@ -1119,13 +1144,33 @@ class Response(object):
             self.headers.update(headers)
         if self.status_int == 401 and 'www-authenticate' not in self.headers:
             self.headers.update({'www-authenticate': self.www_authenticate()})
-        for key, value in kw.iteritems():
+        for key, value in kw.items():
             setattr(self, key, value)
         # When specifying both 'content_type' and 'charset' in the kwargs,
         # charset needs to be applied *after* content_type, otherwise charset
         # can get wiped out when content_type sorts later in dict order.
         if 'charset' in kw and 'content_type' in kw:
             self.charset = kw['charset']
+
+    @property
+    def conditional_etag(self):
+        """
+        The conditional_etag keyword argument for Response will allow the
+        conditional match value of a If-Match request to be compared to a
+        non-standard value.
+
+        This is available for Storage Policies that do not store the client
+        object data verbatim on the storage nodes, but still need support
+        conditional requests.
+
+        It's most effectively used with X-Backend-Etag-Is-At which would
+        define the additional Metadata key where the original ETag of the
+        clear-form client request data.
+        """
+        if self._conditional_etag is not None:
+            return self._conditional_etag
+        else:
+            return self.etag
 
     def _prepare_for_ranges(self, ranges):
         """
@@ -1137,37 +1182,56 @@ class Response(object):
         self.content_type = ''.join(['multipart/byteranges;',
                                      'boundary=', self.boundary])
 
-        # This section calculate the total size of the targeted response
-        # The value 12 is the length of total bytes of hyphen, new line
-        # form feed for each section header. The value 8 is the length of
-        # total bytes of hyphen, new line, form feed characters for the
-        # closing boundary which appears only once
-        section_header_fixed_len = 12 + (len(self.boundary) +
-                                         len('Content-Type: ') +
-                                         len(content_type) +
-                                         len('Content-Range: bytes '))
+        # This section calculates the total size of the response.
+        section_header_fixed_len = (
+            # --boundary\r\n
+            len(self.boundary) + 4
+            # Content-Type: <type>\r\n
+            + len('Content-Type: ') + len(content_type) + 2
+            # Content-Range: <value>\r\n; <value> accounted for later
+            + len('Content-Range: ') + 2
+            # \r\n at end of headers
+            + 2)
+
         body_size = 0
         for start, end in ranges:
             body_size += section_header_fixed_len
-            body_size += len(str(start) + '-' + str(end - 1) + '/' +
-                             str(content_size)) + (end - start)
-        body_size += 8 + len(self.boundary)
+
+            # length of the value of Content-Range, not including the \r\n
+            # since that's already accounted for
+            cr = content_range_header_value(start, end, content_size)
+            body_size += len(cr)
+
+            # the actual bytes (note: this range is half-open, i.e. begins
+            # with byte <start> and ends with byte <end - 1>, so there's no
+            # fencepost error here)
+            body_size += (end - start)
+
+            # \r\n prior to --boundary
+            body_size += 2
+
+        # --boundary-- terminates the message
+        body_size += len(self.boundary) + 4
+
         self.content_length = body_size
         self.content_range = None
         return content_size, content_type
 
     def _response_iter(self, app_iter, body):
+        etag = self.conditional_etag
         if self.conditional_response and self.request:
-            if self.etag and self.request.if_none_match and \
-                    self.etag in self.request.if_none_match:
+            if etag and self.request.if_none_match and \
+                    etag in self.request.if_none_match:
                 self.status = 304
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
 
-            if self.etag and self.request.if_match and \
-               self.etag not in self.request.if_match:
+            if etag and self.request.if_match and \
+               etag not in self.request.if_match:
                 self.status = 412
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
 
             if self.status_int == 404 and self.request.if_match \
@@ -1178,18 +1242,21 @@ class Response(object):
                 # Failed) response. [RFC 2616 section 14.24]
                 self.status = 412
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
 
             if self.last_modified and self.request.if_modified_since \
                and self.last_modified <= self.request.if_modified_since:
                 self.status = 304
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
 
             if self.last_modified and self.request.if_unmodified_since \
                and self.last_modified > self.request.if_unmodified_since:
                 self.status = 412
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
 
         if self.request and self.request.method == 'HEAD':
@@ -1203,6 +1270,7 @@ class Response(object):
             if ranges == []:
                 self.status = 416
                 self.content_length = 0
+                close_if_possible(app_iter)
                 return ['']
             elif ranges:
                 range_size = len(ranges)
@@ -1257,6 +1325,17 @@ class Response(object):
                 return [body]
         return ['']
 
+    def fix_conditional_response(self):
+        """
+        You may call this once you have set the content_length to the whole
+        object length and body or app_iter to reset the content_length
+        properties on the request.
+
+        It is ok to not call this method, the conditional response will be
+        maintained for you when you __call__ the response.
+        """
+        self.response_iter = self._response_iter(self.app_iter, self._body)
+
     def absolute_location(self):
         """
         Attempt to construct an absolute location.
@@ -1307,12 +1386,15 @@ class Response(object):
         if not self.request:
             self.request = Request(env)
         self.environ = env
-        app_iter = self._response_iter(self.app_iter, self._body)
+
+        if not self.response_iter:
+            self.response_iter = self._response_iter(self.app_iter, self._body)
+
         if 'location' in self.headers and \
                 not env.get('swift.leave_relative_location'):
             self.location = self.absolute_location()
         start_response(self.status, self.headers.items())
-        return app_iter
+        return self.response_iter
 
 
 class HTTPException(Response, Exception):

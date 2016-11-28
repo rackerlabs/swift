@@ -11,7 +11,7 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from __future__ import print_function
 import sys
 import itertools
 import uuid
@@ -19,12 +19,16 @@ from optparse import OptionParser
 from urlparse import urlparse
 import random
 
+import six
+
 from swift.common.manager import Manager
 from swift.common import utils, ring
 from swift.common.storage_policy import POLICIES
 from swift.common.http import HTTP_NOT_FOUND
 
 from swiftclient import client, get_auth, ClientException
+
+from test.probe.common import ENABLED_POLICIES
 
 TIMEOUT = 60
 
@@ -60,12 +64,10 @@ def command(f):
     return f
 
 
+@six.add_metaclass(meta_command)
 class BrainSplitter(object):
-
-    __metaclass__ = meta_command
-
     def __init__(self, url, token, container_name='test', object_name='test',
-                 server_type='container'):
+                 server_type='container', policy=None):
         self.url = url
         self.token = token
         self.account = utils.split_path(urlparse(url).path, 2, 2)[1]
@@ -73,15 +75,32 @@ class BrainSplitter(object):
         self.object_name = object_name
         server_list = ['%s-server' % server_type] if server_type else ['all']
         self.servers = Manager(server_list)
-        policies = list(POLICIES)
+        policies = list(ENABLED_POLICIES)
         random.shuffle(policies)
         self.policies = itertools.cycle(policies)
 
         o = object_name if server_type == 'object' else None
         c = container_name if server_type in ('object', 'container') else None
-        part, nodes = ring.Ring(
-            '/etc/swift/%s.ring.gz' % server_type).get_nodes(
-                self.account, c, o)
+        if server_type in ('container', 'account'):
+            if policy:
+                raise TypeError('Metadata server brains do not '
+                                'support specific storage policies')
+            self.policy = None
+            self.ring = ring.Ring(
+                '/etc/swift/%s.ring.gz' % server_type)
+        elif server_type == 'object':
+            if not policy:
+                raise TypeError('Object BrainSplitters need to '
+                                'specify the storage policy')
+            self.policy = policy
+            policy.load_ring('/etc/swift')
+            self.ring = policy.object_ring
+        else:
+            raise ValueError('Unkonwn server_type: %r' % server_type)
+        self.server_type = server_type
+
+        part, nodes = self.ring.get_nodes(self.account, c, o)
+
         node_ids = [n['id'] for n in nodes]
         if all(n_id in node_ids for n_id in (0, 1)):
             self.primary_numbers = (1, 2)
@@ -123,7 +142,7 @@ class BrainSplitter(object):
         """
         put container with next storage policy
         """
-        policy = self.policies.next()
+        policy = next(self.policies)
         if policy_index is not None:
             policy = POLICIES.get_by_index(int(policy_index))
             if not policy:
@@ -170,6 +189,8 @@ parser.add_option('-o', '--object', default='object-%s' % uuid.uuid4(),
                   help='set object name')
 parser.add_option('-s', '--server_type', default='container',
                   help='set server type')
+parser.add_option('-P', '--policy_name', default=None,
+                  help='set policy')
 
 
 def main():
@@ -184,8 +205,17 @@ def main():
             return 'ERROR: unknown command %s' % cmd
     url, token = get_auth('http://127.0.0.1:8080/auth/v1.0',
                           'test:tester', 'testing')
+    if options.server_type == 'object' and not options.policy_name:
+        options.policy_name = POLICIES.default.name
+    if options.policy_name:
+        options.server_type = 'object'
+        policy = POLICIES.get_by_name(options.policy_name)
+        if not policy:
+            return 'ERROR: unknown policy %r' % options.policy_name
+    else:
+        policy = None
     brain = BrainSplitter(url, token, options.container, options.object,
-                          options.server_type)
+                          options.server_type, policy=policy)
     for cmd_args in commands:
         parts = cmd_args.split(':', 1)
         command = parts[0]
@@ -196,8 +226,8 @@ def main():
         try:
             brain.run(command, *args)
         except ClientException as e:
-            print '**WARNING**: %s raised %s' % (command, e)
-    print 'STATUS'.join(['*' * 25] * 2)
+            print('**WARNING**: %s raised %s' % (command, e))
+    print('STATUS'.join(['*' * 25] * 2))
     brain.servers.status()
     sys.exit()
 

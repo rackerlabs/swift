@@ -56,6 +56,8 @@ Overview and Concepts
     overview_expiring_objects
     cors
     crossdomain
+    overview_erasure_code
+    overview_backing_store
     associated_projects
 
 Developer Documentation
@@ -66,6 +68,7 @@ Developer Documentation
 
     development_guidelines
     development_saio
+    first_contribution_swift
     policies_saio
     development_auth
     development_middleware

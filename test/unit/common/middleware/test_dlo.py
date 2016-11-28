@@ -1,4 +1,4 @@
-#-*- coding:utf-8 -*-
+# coding: utf-8
 # Copyright (c) 2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +26,7 @@ import unittest
 
 from swift.common import exceptions, swob
 from swift.common.middleware import dlo
+from swift.common.utils import closing_if_possible
 from test.unit.common.middleware.helpers import FakeSwift
 
 
@@ -54,8 +55,10 @@ class DloTestCase(unittest.TestCase):
         body = ''
         caught_exc = None
         try:
-            for chunk in body_iter:
-                body += chunk
+            # appease the close-checker
+            with closing_if_possible(body_iter):
+                for chunk in body_iter:
+                    body += chunk
         except Exception as exc:
             if expect_exception:
                 caught_exc = exc
@@ -279,6 +282,9 @@ class TestDloHeadManifest(DloTestCase):
 
 
 class TestDloGetManifest(DloTestCase):
+    def tearDown(self):
+        self.assertEqual(self.app.unclosed_requests, {})
+
     def test_get_manifest(self):
         expected_etag = '"%s"' % md5hex(
             md5hex("aaaaa") + md5hex("bbbbb") + md5hex("ccccc") +
@@ -564,9 +570,10 @@ class TestDloGetManifest(DloTestCase):
                                  environ={'REQUEST_METHOD': 'GET'})
         status, headers, body = self.call_dlo(req)
         self.assertEqual(status, "409 Conflict")
-        err_log = self.dlo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        err_lines = self.dlo.logger.get_lines_for_level('error')
+        self.assertEqual(len(err_lines), 1)
+        self.assertTrue(err_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_error_fetching_second_segment(self):
         self.app.register(
@@ -581,9 +588,10 @@ class TestDloGetManifest(DloTestCase):
         self.assertTrue(isinstance(exc, exceptions.SegmentError))
         self.assertEqual(status, "200 OK")
         self.assertEqual(''.join(body), "aaaaa")  # first segment made it out
-        err_log = self.dlo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        err_lines = self.dlo.logger.get_lines_for_level('error')
+        self.assertEqual(len(err_lines), 1)
+        self.assertTrue(err_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_error_listing_container_first_listing_request(self):
         self.app.register(
@@ -785,7 +793,7 @@ class TestDloGetManifest(DloTestCase):
     def test_get_with_auth_overridden(self):
         auth_got_called = [0]
 
-        def my_auth():
+        def my_auth(req):
             auth_got_called[0] += 1
             return None
 

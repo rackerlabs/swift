@@ -19,7 +19,8 @@ import socket
 from swift import gettext_ as _
 from random import shuffle
 from time import time
-import itertools
+import functools
+import sys
 
 from eventlet import Timeout
 
@@ -31,12 +32,14 @@ from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value, generate_trans_id, \
     affinity_key_function, affinity_locality_predicate, list_from_csv, \
     register_swift_info
-from swift.common.constraints import check_utf8
-from swift.proxy.controllers import AccountController, ObjectController, \
-    ContainerController, InfoController
+from swift.common.constraints import check_utf8, valid_api_version
+from swift.proxy.controllers import AccountController, ContainerController, \
+    ObjectControllerRouter, InfoController
+from swift.proxy.controllers.base import get_container_info, NodeIter
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, HTTPException, Request
+    HTTPServerError, HTTPException, Request, HTTPServiceUnavailable
+from swift.common.exceptions import APIVersionError
 
 
 # List of entry points for mandatory middlewares.
@@ -60,6 +63,9 @@ required_filters = [
                                if pipe.startswith('catch_errors')
                                else [])},
     {'name': 'dlo', 'after_fn': lambda _junk: [
+        'staticweb', 'tempauth', 'keystoneauth',
+        'catch_errors', 'gatekeeper', 'proxy_logging']},
+    {'name': 'versioned_writes', 'after_fn': lambda _junk: [
         'staticweb', 'tempauth', 'keystoneauth',
         'catch_errors', 'gatekeeper', 'proxy_logging']}]
 
@@ -109,6 +115,7 @@ class Application(object):
         # ensure rings are loaded for all configured storage policies
         for policy in POLICIES:
             policy.load_ring(swift_dir)
+        self.obj_controller_router = ObjectControllerRouter()
         self.memcache = memcache
         mimetypes.init(mimetypes.knownfiles +
                        [os.path.join(swift_dir, 'mime.types')])
@@ -186,6 +193,7 @@ class Application(object):
             'x-container-read, x-container-write, '
             'x-container-sync-key, x-container-sync-to, '
             'x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, '
+            'x-container-meta-temp-url-key, x-container-meta-temp-url-key-2, '
             'x-account-access-control')
         self.swift_owner_headers = [
             name.strip().title()
@@ -205,7 +213,7 @@ class Application(object):
         self.expose_info = config_true_value(
             conf.get('expose_info', 'yes'))
         self.disallowed_sections = list_from_csv(
-            conf.get('disallowed_sections'))
+            conf.get('disallowed_sections', 'swift.valid_api_versions'))
         self.admin_key = conf.get('admin_key', None)
         register_swift_info(
             version=swift_version,
@@ -234,29 +242,46 @@ class Application(object):
         """
         return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
-    def get_controller(self, path):
+    def get_controller(self, req):
         """
         Get the controller to handle a request.
 
-        :param path: path from request
+        :param req: the request
         :returns: tuple of (controller class, path dictionary)
 
         :raises: ValueError (thrown by split_path) if given invalid path
         """
-        if path == '/info':
+        if req.path == '/info':
             d = dict(version=None,
                      expose_info=self.expose_info,
                      disallowed_sections=self.disallowed_sections,
                      admin_key=self.admin_key)
             return InfoController, d
 
-        version, account, container, obj = split_path(path, 1, 4, True)
+        version, account, container, obj = split_path(req.path, 1, 4, True)
         d = dict(version=version,
                  account_name=account,
                  container_name=container,
                  object_name=obj)
+        if account and not valid_api_version(version):
+            raise APIVersionError('Invalid path')
         if obj and container and account:
-            return ObjectController, d
+            info = get_container_info(req.environ, self)
+            policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
+                                           info['storage_policy'])
+            policy = POLICIES.get_by_index(policy_index)
+            if not policy:
+                # This indicates that a new policy has been created,
+                # with rings, deployed, released (i.e. deprecated =
+                # False), used by a client to create a container via
+                # another proxy that was restarted after the policy
+                # was released, and is now cached - all before this
+                # worker was HUPed to stop accepting new
+                # connections.  There should never be an "unknown"
+                # index - but when there is - it's probably operator
+                # error and hopefully temporary.
+                raise HTTPServiceUnavailable('Unknown Storage Policy')
+            return self.obj_controller_router[policy], d
         elif container and account:
             return ContainerController, d
         elif account and not container and not obj:
@@ -316,10 +341,13 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
-                controller, path_parts = self.get_controller(req.path)
+                controller, path_parts = self.get_controller(req)
                 p = req.path_info
                 if isinstance(p, unicode):
                     p = p.encode('utf-8')
+            except APIVersionError:
+                self.logger.increment('errors')
+                return HTTPBadRequest(request=req)
             except ValueError:
                 self.logger.increment('errors')
                 return HTTPNotFound(request=req)
@@ -352,6 +380,7 @@ class Application(object):
                 allowed_methods = getattr(controller, 'allowed_methods', set())
                 return HTTPMethodNotAllowed(
                     request=req, headers={'Allow': ', '.join(allowed_methods)})
+            old_authorize = None
             if 'swift.authorize' in req.environ:
                 # We call authorize before the handler, always. If authorized,
                 # we remove the swift.authorize hook so isn't ever called
@@ -362,7 +391,7 @@ class Application(object):
                 if not resp and not req.headers.get('X-Copy-From-Account') \
                         and not req.headers.get('Destination-Account'):
                     # No resp means authorized, no delayed recheck required.
-                    del req.environ['swift.authorize']
+                    old_authorize = req.environ['swift.authorize']
                 else:
                     # Response indicates denial, but we might delay the denial
                     # and recheck later. If not delayed, return the error now.
@@ -372,7 +401,13 @@ class Application(object):
             # gets mutated during handling.  This way logging can display the
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
-            return handler(req)
+            try:
+                if old_authorize:
+                    req.environ.pop('swift.authorize', None)
+                return handler(req)
+            finally:
+                if old_authorize:
+                    req.environ['swift.authorize'] = old_authorize
         except HTTPException as error_response:
             return error_response
         except (Exception, Timeout):
@@ -471,62 +506,10 @@ class Application(object):
                           'port': node['port'], 'device': node['device']})
 
     def iter_nodes(self, ring, partition, node_iter=None):
-        """
-        Yields nodes for a ring partition, skipping over error
-        limited nodes and stopping at the configurable number of
-        nodes. If a node yielded subsequently gets error limited, an
-        extra node will be yielded to take its place.
+        return NodeIter(self, ring, partition, node_iter=node_iter)
 
-        Note that if you're going to iterate over this concurrently from
-        multiple greenthreads, you'll want to use a
-        swift.common.utils.GreenthreadSafeIterator to serialize access.
-        Otherwise, you may get ValueErrors from concurrent access. (You also
-        may not, depending on how logging is configured, the vagaries of
-        socket IO and eventlet, and the phase of the moon.)
-
-        :param ring: ring to get yield nodes from
-        :param partition: ring partition to yield nodes for
-        :param node_iter: optional iterable of nodes to try. Useful if you
-            want to filter or reorder the nodes.
-        """
-        part_nodes = ring.get_part_nodes(partition)
-        if node_iter is None:
-            node_iter = itertools.chain(part_nodes,
-                                        ring.get_more_nodes(partition))
-        num_primary_nodes = len(part_nodes)
-
-        # Use of list() here forcibly yanks the first N nodes (the primary
-        # nodes) from node_iter, so the rest of its values are handoffs.
-        primary_nodes = self.sort_nodes(
-            list(itertools.islice(node_iter, num_primary_nodes)))
-        handoff_nodes = node_iter
-        nodes_left = self.request_node_count(len(primary_nodes))
-
-        log_handoffs_threshold = nodes_left - len(primary_nodes)
-        for node in primary_nodes:
-            if not self.error_limited(node):
-                yield node
-                if not self.error_limited(node):
-                    nodes_left -= 1
-                    if nodes_left <= 0:
-                        return
-        handoffs = 0
-        for node in handoff_nodes:
-            if not self.error_limited(node):
-                handoffs += 1
-                if self.log_handoffs and handoffs > log_handoffs_threshold:
-                    self.logger.increment('handoff_count')
-                    self.logger.warning(
-                        'Handoff requested (%d)' % handoffs)
-                    if handoffs - log_handoffs_threshold == len(primary_nodes):
-                        self.logger.increment('handoff_all_count')
-                yield node
-                if not self.error_limited(node):
-                    nodes_left -= 1
-                    if nodes_left <= 0:
-                        return
-
-    def exception_occurred(self, node, typ, additional_info):
+    def exception_occurred(self, node, typ, additional_info,
+                           **kwargs):
         """
         Handle logging of generic exceptions.
 
@@ -535,11 +518,18 @@ class Application(object):
         :param additional_info: additional information to log
         """
         self._incr_node_errors(node)
-        self.logger.exception(
-            _('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s re: '
-              '%(info)s'),
-            {'type': typ, 'ip': node['ip'], 'port': node['port'],
-             'device': node['device'], 'info': additional_info})
+        if 'level' in kwargs:
+            log = functools.partial(self.logger.log, kwargs.pop('level'))
+            if 'exc_info' not in kwargs:
+                kwargs['exc_info'] = sys.exc_info()
+        else:
+            log = self.logger.exception
+        log(_('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s'
+              ' re: %(info)s'),
+            {'type': typ, 'ip': node['ip'],
+             'port': node['port'], 'device': node['device'],
+             'info': additional_info},
+            **kwargs)
 
     def modify_wsgi_pipeline(self, pipe):
         """

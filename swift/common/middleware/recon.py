@@ -15,9 +15,11 @@
 
 import errno
 import os
+import time
 from swift import gettext_ as _
 
 from swift import __version__ as swiftver
+from swift.common.storage_policy import POLICIES
 from swift.common.swob import Request, Response
 from swift.common.utils import get_logger, config_true_value, json, \
     SWIFT_CONF_FILE
@@ -53,13 +55,17 @@ class ReconMiddleware(object):
                                                   'container.recon')
         self.account_recon_cache = os.path.join(self.recon_cache_path,
                                                 'account.recon')
+        self.drive_recon_cache = os.path.join(self.recon_cache_path,
+                                              'drive.recon')
         self.account_ring_path = os.path.join(swift_dir, 'account.ring.gz')
         self.container_ring_path = os.path.join(swift_dir, 'container.ring.gz')
+
         self.rings = [self.account_ring_path, self.container_ring_path]
         # include all object ring files (for all policies)
-        for f in os.listdir(swift_dir):
-            if f.startswith('object') and f.endswith('ring.gz'):
-                self.rings.append(os.path.join(swift_dir, f))
+        for policy in POLICIES:
+            self.rings.append(os.path.join(swift_dir,
+                                           policy.ring_name + '.ring.gz'))
+
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
 
     def _from_recon_cache(self, cache_keys, cache_file, openr=open):
@@ -124,21 +130,26 @@ class ReconMiddleware(object):
         return self._from_recon_cache(['async_pending'],
                                       self.object_recon_cache)
 
+    def get_driveaudit_error(self):
+        """get # of drive audit errors"""
+        return self._from_recon_cache(['drive_audit_errors'],
+                                      self.drive_recon_cache)
+
     def get_replication_info(self, recon_type):
         """get replication info"""
+        replication_list = ['replication_time',
+                            'replication_stats',
+                            'replication_last']
         if recon_type == 'account':
-            return self._from_recon_cache(['replication_time',
-                                           'replication_stats',
-                                           'replication_last'],
+            return self._from_recon_cache(replication_list,
                                           self.account_recon_cache)
         elif recon_type == 'container':
-            return self._from_recon_cache(['replication_time',
-                                           'replication_stats',
-                                           'replication_last'],
+            return self._from_recon_cache(replication_list,
                                           self.container_recon_cache)
         elif recon_type == 'object':
-            return self._from_recon_cache(['object_replication_time',
-                                           'object_replication_last'],
+            replication_list += ['object_replication_time',
+                                 'object_replication_last']
+            return self._from_recon_cache(replication_list,
                                           self.object_recon_cache)
         else:
             return None
@@ -266,15 +277,28 @@ class ReconMiddleware(object):
 
     def get_quarantine_count(self):
         """get obj/container/account quarantine counts"""
-        qcounts = {"objects": 0, "containers": 0, "accounts": 0}
+        qcounts = {"objects": 0, "containers": 0, "accounts": 0,
+                   "policies": {}}
         qdir = "quarantined"
         for device in os.listdir(self.devices):
-            for qtype in qcounts:
-                qtgt = os.path.join(self.devices, device, qdir, qtype)
-                if os.path.exists(qtgt):
+            qpath = os.path.join(self.devices, device, qdir)
+            if os.path.exists(qpath):
+                for qtype in os.listdir(qpath):
+                    qtgt = os.path.join(qpath, qtype)
                     linkcount = os.lstat(qtgt).st_nlink
                     if linkcount > 2:
-                        qcounts[qtype] += linkcount - 2
+                        if qtype.startswith('objects'):
+                            if '-' in qtype:
+                                pkey = qtype.split('-', 1)[1]
+                            else:
+                                pkey = '0'
+                            qcounts['policies'].setdefault(pkey,
+                                                           {'objects': 0})
+                            qcounts['policies'][pkey]['objects'] \
+                                += linkcount - 2
+                            qcounts['objects'] += linkcount - 2
+                        else:
+                            qcounts[qtype] += linkcount - 2
         return qcounts
 
     def get_socket_info(self, openr=open):
@@ -308,6 +332,11 @@ class ReconMiddleware(object):
                 raise
         return sockstat
 
+    def get_time(self):
+        """get current time"""
+
+        return time.time()
+
     def GET(self, req):
         root, rcheck, rtype = req.split_path(1, 3, True)
         all_rtypes = ['account', 'container', 'object']
@@ -320,7 +349,7 @@ class ReconMiddleware(object):
         elif rcheck == 'replication' and rtype in all_rtypes:
             content = self.get_replication_info(rtype)
         elif rcheck == 'replication' and rtype is None:
-            #handle old style object replication requests
+            # handle old style object replication requests
             content = self.get_replication_info('object')
         elif rcheck == "devices":
             content = self.get_device_info()
@@ -346,6 +375,10 @@ class ReconMiddleware(object):
             content = self.get_socket_info()
         elif rcheck == "version":
             content = self.get_version()
+        elif rcheck == "driveaudit":
+            content = self.get_driveaudit_error()
+        elif rcheck == "time":
+            content = self.get_time()
         else:
             content = "Invalid path: %s" % req.path
             return Response(request=req, status="404 Not Found",

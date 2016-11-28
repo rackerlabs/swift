@@ -13,11 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import os
 import urllib
 import time
 from urllib import unquote
-from ConfigParser import ConfigParser, NoSectionError, NoOptionError
+
+from six.moves.configparser import ConfigParser, NoSectionError, NoOptionError
 
 from swift.common import utils, exceptions
 from swift.common.swob import HTTPBadRequest, HTTPLengthRequired, \
@@ -35,6 +37,8 @@ CONTAINER_LISTING_LIMIT = 10000
 ACCOUNT_LISTING_LIMIT = 10000
 MAX_ACCOUNT_NAME_LENGTH = 256
 MAX_CONTAINER_NAME_LENGTH = 256
+VALID_API_VERSIONS = ["v1", "v1.0"]
+EXTRA_HEADER_COUNT = 0
 
 # If adding an entry to DEFAULT_CONSTRAINTS, note that
 # these constraints are automatically published by the
@@ -52,6 +56,8 @@ DEFAULT_CONSTRAINTS = {
     'account_listing_limit': ACCOUNT_LISTING_LIMIT,
     'max_account_name_length': MAX_ACCOUNT_NAME_LENGTH,
     'max_container_name_length': MAX_CONTAINER_NAME_LENGTH,
+    'valid_api_versions': VALID_API_VERSIONS,
+    'extra_header_count': EXTRA_HEADER_COUNT,
 }
 
 SWIFT_CONSTRAINTS_LOADED = False
@@ -72,13 +78,17 @@ def reload_constraints():
         SWIFT_CONSTRAINTS_LOADED = True
         for name in DEFAULT_CONSTRAINTS:
             try:
-                value = int(constraints_conf.get('swift-constraints', name))
+                value = constraints_conf.get('swift-constraints', name)
             except NoOptionError:
                 pass
             except NoSectionError:
                 # We are never going to find the section for another option
                 break
             else:
+                try:
+                    value = int(value)
+                except ValueError:
+                    value = utils.list_from_csv(value)
                 OVERRIDE_CONSTRAINTS[name] = value
     for name, default in DEFAULT_CONSTRAINTS.items():
         value = OVERRIDE_CONSTRAINTS.get(name, default)
@@ -99,6 +109,13 @@ FORMAT2CONTENT_TYPE = {'plain': 'text/plain', 'json': 'application/json',
                        'xml': 'application/xml'}
 
 
+# By default the maximum number of allowed headers depends on the number of max
+# allowed metadata settings plus a default value of 32 for regular http
+# headers.  If for some reason this is not enough (custom middleware for
+# example) it can be increased with the extra_header_count constraint.
+MAX_HEADER_COUNT = MAX_META_COUNT + 32 + max(EXTRA_HEADER_COUNT, 0)
+
+
 def check_metadata(req, target_type):
     """
     Check metadata sent in the request headers.  This should only check
@@ -114,7 +131,7 @@ def check_metadata(req, target_type):
     prefix = 'x-%s-meta-' % target_type.lower()
     meta_count = 0
     meta_size = 0
-    for key, value in req.headers.iteritems():
+    for key, value in req.headers.items():
         if isinstance(value, basestring) and len(value) > MAX_HEADER_SIZE:
             return HTTPBadRequest(body='Header value too long: %s' %
                                   key[:MAX_META_NAME_LENGTH],
@@ -202,6 +219,19 @@ def check_object_creation(req, object_name):
         return HTTPBadRequest(request=req, body='Invalid Content-Type',
                               content_type='text/plain')
     return check_metadata(req, 'object')
+
+
+def check_dir(root, drive):
+    """
+    Verify that the path to the device is a directory and is a lesser
+    constraint that is enforced when a full mount_check isn't possible
+    with, for instance, a VM using loopback or partitions.
+
+    :param root:  base path where the dir is
+    :param drive: drive name to be checked
+    :returns: True if it is a valid directoy, False otherwise
+    """
+    return os.path.isdir(os.path.join(root, drive))
 
 
 def check_mount(root, drive):
@@ -377,21 +407,40 @@ def check_destination_header(req):
                              '<container name>/<object name>')
 
 
-def check_account_format(req, account):
+def check_name_format(req, name, target_type):
     """
-    Validate that the header contains valid account name.
-    We assume the caller ensures that
-    destination header is present in req.headers.
+    Validate that the header contains valid account or container name.
 
     :param req: HTTP request object
-    :returns: A properly encoded account name
+    :param name: header value to validate
+    :param target_type: which header is being validated (Account or Container)
+    :returns: A properly encoded account name or container name
     :raise: HTTPPreconditionFailed if account header
             is not well formatted.
     """
-    if isinstance(account, unicode):
-        account = account.encode('utf-8')
-    if '/' in account:
+    if not name:
         raise HTTPPreconditionFailed(
             request=req,
-            body='Account name cannot contain slashes')
-    return account
+            body='%s name cannot be empty' % target_type)
+    if isinstance(name, unicode):
+        name = name.encode('utf-8')
+    if '/' in name:
+        raise HTTPPreconditionFailed(
+            request=req,
+            body='%s name cannot contain slashes' % target_type)
+    return name
+
+check_account_format = functools.partial(check_name_format,
+                                         target_type='Account')
+check_container_format = functools.partial(check_name_format,
+                                           target_type='Container')
+
+
+def valid_api_version(version):
+    """ Checks if the requested version is valid.
+
+    Currently Swift only supports "v1" and "v1.0". """
+    global VALID_API_VERSIONS
+    if not isinstance(VALID_API_VERSIONS, list):
+        VALID_API_VERSIONS = [str(VALID_API_VERSIONS)]
+    return version in VALID_API_VERSIONS

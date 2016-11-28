@@ -15,12 +15,12 @@
 
 """ In-Memory Disk File Interface for Swift Object Server"""
 
-import cStringIO
 import time
 import hashlib
 from contextlib import contextmanager
 
 from eventlet import Timeout
+from six import moves
 
 from swift.common.utils import Timestamp
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
@@ -56,6 +56,12 @@ class InMemoryFileSystem(object):
 
     def get_diskfile(self, account, container, obj, **kwargs):
         return DiskFile(self, account, container, obj)
+
+    def pickle_async_update(self, *args, **kwargs):
+        """
+        For now don't handle async updates.
+        """
+        pass
 
 
 class DiskFileWriter(object):
@@ -97,6 +103,16 @@ class DiskFileWriter(object):
         """
         metadata['name'] = self._name
         self._filesystem.put_object(self._name, self._fp, metadata)
+
+    def commit(self, timestamp):
+        """
+        Perform any operations necessary to mark the object as durable. For
+        mem_diskfile type this is a no-op.
+
+        :param timestamp: object put timestamp, an instance of
+                          :class:`~swift.common.utils.Timestamp`
+        """
+        pass
 
 
 class DiskFileReader(object):
@@ -369,7 +385,7 @@ class DiskFile(object):
                      disk
         :raises DiskFileNoSpace: if a size is specified and allocation fails
         """
-        fp = cStringIO.StringIO()
+        fp = moves.cStringIO()
         try:
             yield DiskFileWriter(self._filesystem, self._name, fp)
         finally:
@@ -397,3 +413,11 @@ class DiskFile(object):
         fp, md = self._filesystem.get_object(self._name)
         if md and md['X-Timestamp'] < Timestamp(timestamp):
             self._filesystem.del_object(self._name)
+
+    @property
+    def timestamp(self):
+        if self._metadata is None:
+            raise DiskFileNotOpen()
+        return Timestamp(self._metadata.get('X-Timestamp'))
+
+    data_timestamp = timestamp

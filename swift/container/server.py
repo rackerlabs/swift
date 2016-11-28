@@ -38,6 +38,7 @@ from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.http import HTTP_NOT_FOUND, is_success
 from swift.common.storage_policy import POLICIES
+from swift.common.base_storage_server import BaseStorageServer
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
@@ -71,24 +72,22 @@ def gen_resp_headers(info, is_deleted=False):
     return headers
 
 
-class ContainerController(object):
+class ContainerController(BaseStorageServer):
     """WSGI Controller for the container server."""
 
     # Ensure these are all lowercase
     save_headers = ['x-container-read', 'x-container-write',
                     'x-container-sync-key', 'x-container-sync-to']
+    server_type = 'container-server'
 
     def __init__(self, conf, logger=None):
+        super(ContainerController, self).__init__(conf)
         self.logger = logger or get_logger(conf, log_route='container-server')
         self.log_requests = config_true_value(conf.get('log_requests', 'true'))
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
-        replication_server = conf.get('replication_server', None)
-        if replication_server is not None:
-            replication_server = config_true_value(replication_server)
-        self.replication_server = replication_server
         #: ContainerSyncCluster instance for validating sync-to values.
         self.realms_conf = ContainerSyncRealms(
             os.path.join(
@@ -186,7 +185,11 @@ class ContainerController(object):
             return HTTPBadRequest(req=req)
 
         if account_partition:
-            updates = zip(account_hosts, account_devices)
+            # zip is lazy on py3, but we need a list, so force evaluation.
+            # On py2 it's an extra list copy, but the list is so small
+            # (one element per replica in account ring, usually 3) that it
+            # doesn't matter.
+            updates = list(zip(account_hosts, account_devices))
         else:
             updates = []
 
@@ -309,7 +312,9 @@ class ContainerController(object):
         elif requested_policy_index is not None:
             # validate requested policy with existing container
             if requested_policy_index != broker.storage_policy_index:
-                raise HTTPConflict(request=req)
+                raise HTTPConflict(request=req,
+                                   headers={'x-backend-storage-policy-index':
+                                            broker.storage_policy_index})
         broker.update_put_timestamp(timestamp)
         if broker.is_deleted():
             raise HTTPConflict(request=req)
@@ -366,7 +371,7 @@ class ContainerController(object):
             metadata = {}
             metadata.update(
                 (key, (value, req_timestamp.internal))
-                for key, value in req.headers.iteritems()
+                for key, value in req.headers.items()
                 if key.lower() in self.save_headers or
                 is_sys_or_user_meta('container', key))
             if 'X-Container-Sync-To' in metadata:
@@ -379,9 +384,13 @@ class ContainerController(object):
             if resp:
                 return resp
             if created:
-                return HTTPCreated(request=req)
+                return HTTPCreated(request=req,
+                                   headers={'x-backend-storage-policy-index':
+                                            broker.storage_policy_index})
             else:
-                return HTTPAccepted(request=req)
+                return HTTPAccepted(request=req,
+                                    headers={'x-backend-storage-policy-index':
+                                             broker.storage_policy_index})
 
     @public
     @timing_stats(sample_rate=0.1)
@@ -401,7 +410,7 @@ class ContainerController(object):
             return HTTPNotFound(request=req, headers=headers)
         headers.update(
             (key, value)
-            for key, (value, timestamp) in broker.metadata.iteritems()
+            for key, (value, timestamp) in broker.metadata.items()
             if value != '' and (key.lower() in self.save_headers or
                                 is_sys_or_user_meta('container', key)))
         headers['Content-Type'] = out_content_type
@@ -468,7 +477,7 @@ class ContainerController(object):
 
     def create_listing(self, req, out_content_type, info, resp_headers,
                        metadata, container_list, container):
-        for key, (value, timestamp) in metadata.iteritems():
+        for key, (value, timestamp) in metadata.items():
             if value and (key.lower() in self.save_headers or
                           is_sys_or_user_meta('container', key)):
                 resp_headers[key] = value
@@ -542,7 +551,7 @@ class ContainerController(object):
         metadata = {}
         metadata.update(
             (key, (value, req_timestamp.internal))
-            for key, value in req.headers.iteritems()
+            for key, value in req.headers.items()
             if key.lower() in self.save_headers or
             is_sys_or_user_meta('container', key))
         if metadata:
@@ -564,15 +573,12 @@ class ContainerController(object):
             try:
                 # disallow methods which have not been marked 'public'
                 try:
-                    method = getattr(self, req.method)
-                    getattr(method, 'publicly_accessible')
-                    replication_method = getattr(method, 'replication', False)
-                    if (self.replication_server is not None and
-                            self.replication_server != replication_method):
+                    if req.method not in self.allowed_methods:
                         raise AttributeError('Not allowed method.')
                 except AttributeError:
                     res = HTTPMethodNotAllowed()
                 else:
+                    method = getattr(self, req.method)
                     res = method(req)
             except HTTPException as error_response:
                 res = error_response

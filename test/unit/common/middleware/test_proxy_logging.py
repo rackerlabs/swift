@@ -15,30 +15,45 @@
 
 import unittest
 from urllib import unquote
-import cStringIO as StringIO
 from logging.handlers import SysLogHandler
+
 import mock
+from six import BytesIO
 
 from test.unit import FakeLogger
-from swift.common.utils import get_logger
+from swift.common.utils import get_logger, split_path
 from swift.common.middleware import proxy_logging
 from swift.common.swob import Request, Response
 from swift.common import constraints
+from swift.common.storage_policy import StoragePolicy
+from test.unit import patch_policies
 
 
 class FakeApp(object):
 
-    def __init__(self, body=None, response_str='200 OK'):
+    def __init__(self, body=None, response_str='200 OK', policy_idx='0'):
         if body is None:
             body = ['FAKE APP']
 
         self.body = body
         self.response_str = response_str
+        self.policy_idx = policy_idx
 
     def __call__(self, env, start_response):
-        start_response(self.response_str,
-                       [('Content-Type', 'text/plain'),
-                        ('Content-Length', str(sum(map(len, self.body))))])
+        try:
+            # /v1/a/c or /v1/a/c/o
+            split_path(env['PATH_INFO'], 3, 4, True)
+            is_container_or_object_req = True
+        except ValueError:
+            is_container_or_object_req = False
+
+        headers = [('Content-Type', 'text/plain'),
+                   ('Content-Length', str(sum(map(len, self.body))))]
+        if is_container_or_object_req and self.policy_idx is not None:
+            headers.append(('X-Backend-Storage-Policy-Index',
+                           str(self.policy_idx)))
+
+        start_response(self.response_str, headers)
         while env['wsgi.input'].read(5):
             pass
         return self.body
@@ -90,7 +105,11 @@ def start_response(*args):
     pass
 
 
+@patch_policies([StoragePolicy(0, 'zero', False)])
 class TestProxyLogging(unittest.TestCase):
+
+    def setUp(self):
+        pass
 
     def _log_parts(self, app, should_be_empty=False):
         info_calls = app.access_logger.log_dict['info']
@@ -135,11 +154,14 @@ class TestProxyLogging(unittest.TestCase):
         for timing_call in timing_calls:
             self.assertNotEqual(not_exp_metric, timing_call[0][0])
 
-    def assertUpdateStats(self, exp_metric, exp_bytes, app):
-        update_stats_calls = app.access_logger.log_dict['update_stats']
-        self.assertEquals(1, len(update_stats_calls))
-        self.assertEquals({}, update_stats_calls[0][1])
-        self.assertEquals((exp_metric, exp_bytes), update_stats_calls[0][0])
+    def assertUpdateStats(self, exp_metrics_and_values, app):
+        update_stats_calls = sorted(app.access_logger.log_dict['update_stats'])
+        got_metrics_values_and_kwargs = [(usc[0][0], usc[0][1], usc[1])
+                                         for usc in update_stats_calls]
+        exp_metrics_values_and_kwargs = [(emv[0], emv[1], {})
+                                         for emv in exp_metrics_and_values]
+        self.assertEqual(got_metrics_values_and_kwargs,
+                         exp_metrics_values_and_kwargs)
 
     def test_log_request_statsd_invalid_stats_types(self):
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
@@ -187,24 +209,61 @@ class TestProxyLogging(unittest.TestCase):
             '/v1/a/c/o/p/p2': 'object',
         }
         with mock.patch("time.time", stub_time):
-            for path, exp_type in path_types.iteritems():
+            for path, exp_type in path_types.items():
                 # GET
                 app = proxy_logging.ProxyLoggingMiddleware(
                     FakeApp(body='7654321', response_str='321 Fubar'), {})
                 app.access_logger = FakeLogger()
                 req = Request.blank(path, environ={
                     'REQUEST_METHOD': 'GET',
-                    'wsgi.input': StringIO.StringIO('4321')})
+                    'wsgi.input': BytesIO(b'4321')})
                 stub_times = [18.0, 20.71828182846]
                 iter_response = app(req.environ, lambda *_: None)
+
                 self.assertEqual('7654321', ''.join(iter_response))
                 self.assertTiming('%s.GET.321.timing' % exp_type, app,
                                   exp_timing=2.71828182846 * 1000)
                 self.assertTimingSince(
                     '%s.GET.321.first-byte.timing' % exp_type, app,
                     exp_start=18.0)
-                self.assertUpdateStats('%s.GET.321.xfer' % exp_type,
-                                       4 + 7, app)
+                if exp_type == 'object':
+                    # Object operations also return stats by policy
+                    # In this case, the value needs to match the timing for GET
+                    self.assertTiming('%s.policy.0.GET.321.timing' % exp_type,
+                                      app, exp_timing=2.71828182846 * 1000)
+                    self.assertUpdateStats([('%s.GET.321.xfer' % exp_type,
+                                             4 + 7),
+                                            ('object.policy.0.GET.321.xfer',
+                                            4 + 7)],
+                                           app)
+                else:
+                    self.assertUpdateStats([('%s.GET.321.xfer' % exp_type,
+                                            4 + 7)],
+                                           app)
+
+                # GET Repeat the test above, but with a non-existent policy
+                # Do this only for object types
+                if exp_type == 'object':
+                    app = proxy_logging.ProxyLoggingMiddleware(
+                        FakeApp(body='7654321', response_str='321 Fubar',
+                                policy_idx='-1'), {})
+                    app.access_logger = FakeLogger()
+                    req = Request.blank(path, environ={
+                        'REQUEST_METHOD': 'GET',
+                        'wsgi.input': BytesIO(b'4321')})
+                    stub_times = [18.0, 20.71828182846]
+                    iter_response = app(req.environ, lambda *_: None)
+
+                    self.assertEqual('7654321', ''.join(iter_response))
+                    self.assertTiming('%s.GET.321.timing' % exp_type, app,
+                                      exp_timing=2.71828182846 * 1000)
+                    self.assertTimingSince(
+                        '%s.GET.321.first-byte.timing' % exp_type, app,
+                        exp_start=18.0)
+                    # No results returned for the non-existent policy
+                    self.assertUpdateStats([('%s.GET.321.xfer' % exp_type,
+                                            4 + 7)],
+                                           app)
 
                 # GET with swift.proxy_access_log_made already set
                 app = proxy_logging.ProxyLoggingMiddleware(
@@ -213,7 +272,7 @@ class TestProxyLogging(unittest.TestCase):
                 req = Request.blank(path, environ={
                     'REQUEST_METHOD': 'GET',
                     'swift.proxy_access_log_made': True,
-                    'wsgi.input': StringIO.StringIO('4321')})
+                    'wsgi.input': BytesIO(b'4321')})
                 stub_times = [18.0, 20.71828182846]
                 iter_response = app(req.environ, lambda *_: None)
                 self.assertEqual('7654321', ''.join(iter_response))
@@ -229,7 +288,7 @@ class TestProxyLogging(unittest.TestCase):
                 app.access_logger = FakeLogger()
                 req = Request.blank(path, environ={
                     'REQUEST_METHOD': 'PUT',
-                    'wsgi.input': StringIO.StringIO('654321')})
+                    'wsgi.input': BytesIO(b'654321')})
                 # (it's not a GET, so time() doesn't have a 2nd call)
                 stub_times = [58.2, 58.2 + 7.3321]
                 iter_response = app(req.environ, lambda *_: None)
@@ -240,8 +299,42 @@ class TestProxyLogging(unittest.TestCase):
                     '%s.GET.314.first-byte.timing' % exp_type, app)
                 self.assertNotTiming(
                     '%s.PUT.314.first-byte.timing' % exp_type, app)
-                self.assertUpdateStats(
-                    '%s.PUT.314.xfer' % exp_type, 6 + 8, app)
+                if exp_type == 'object':
+                    # Object operations also return stats by policy In this
+                    # case, the value needs to match the timing for PUT.
+                    self.assertTiming('%s.policy.0.PUT.314.timing' %
+                                      exp_type, app,
+                                      exp_timing=7.3321 * 1000)
+                    self.assertUpdateStats(
+                        [('object.PUT.314.xfer', 6 + 8),
+                         ('object.policy.0.PUT.314.xfer', 6 + 8)], app)
+                else:
+                    self.assertUpdateStats(
+                        [('%s.PUT.314.xfer' % exp_type, 6 + 8)], app)
+
+                # PUT Repeat the test above, but with a non-existent policy
+                # Do this only for object types
+                if exp_type == 'object':
+                    app = proxy_logging.ProxyLoggingMiddleware(
+                        FakeApp(body='87654321', response_str='314 PiTown',
+                                policy_idx='-1'), {})
+                    app.access_logger = FakeLogger()
+                    req = Request.blank(path, environ={
+                        'REQUEST_METHOD': 'PUT',
+                        'wsgi.input': BytesIO(b'654321')})
+                    # (it's not a GET, so time() doesn't have a 2nd call)
+                    stub_times = [58.2, 58.2 + 7.3321]
+                    iter_response = app(req.environ, lambda *_: None)
+                    self.assertEqual('87654321', ''.join(iter_response))
+                    self.assertTiming('%s.PUT.314.timing' % exp_type, app,
+                                      exp_timing=7.3321 * 1000)
+                    self.assertNotTiming(
+                        '%s.GET.314.first-byte.timing' % exp_type, app)
+                    self.assertNotTiming(
+                        '%s.PUT.314.first-byte.timing' % exp_type, app)
+                    # No results returned for the non-existent policy
+                    self.assertUpdateStats([('object.PUT.314.xfer', 6 + 8)],
+                                           app)
 
     def test_log_request_stat_method_filtering_default(self):
         method_map = {
@@ -257,7 +350,7 @@ class TestProxyLogging(unittest.TestCase):
             'DELETE': 'DELETE',
             'OPTIONS': 'OPTIONS',
         }
-        for method, exp_method in method_map.iteritems():
+        for method, exp_method in method_map.items():
             app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
             app.access_logger = FakeLogger()
             req = Request.blank('/v1/a/', environ={'REQUEST_METHOD': method})
@@ -265,8 +358,8 @@ class TestProxyLogging(unittest.TestCase):
             app.log_request(req, 299, 11, 3, now, now + 1.17)
             self.assertTiming('account.%s.299.timing' % exp_method, app,
                               exp_timing=1.17 * 1000)
-            self.assertUpdateStats('account.%s.299.xfer' % exp_method,
-                                   11 + 3, app)
+            self.assertUpdateStats([('account.%s.299.xfer' % exp_method,
+                                   11 + 3)], app)
 
     def test_log_request_stat_method_filtering_custom(self):
         method_map = {
@@ -281,7 +374,7 @@ class TestProxyLogging(unittest.TestCase):
         # this conf var supports optional leading access_
         for conf_key in ['access_log_statsd_valid_http_methods',
                          'log_statsd_valid_http_methods']:
-            for method, exp_method in method_map.iteritems():
+            for method, exp_method in method_map.items():
                 app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
                     conf_key: 'SPECIAL,  GET,PUT ',  # crazy spaces ok
                 })
@@ -292,8 +385,8 @@ class TestProxyLogging(unittest.TestCase):
                 app.log_request(req, 911, 4, 43, now, now + 1.01)
                 self.assertTiming('container.%s.911.timing' % exp_method, app,
                                   exp_timing=1.01 * 1000)
-                self.assertUpdateStats('container.%s.911.xfer' % exp_method,
-                                       4 + 43, app)
+                self.assertUpdateStats([('container.%s.911.xfer' % exp_method,
+                                       4 + 43)], app)
 
     def test_basic_req(self):
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
@@ -335,7 +428,7 @@ class TestProxyLogging(unittest.TestCase):
         self.assertEquals(log_parts[6], '200')
         self.assertEquals(resp_body, 'somechunksof data')
         self.assertEquals(log_parts[11], str(len(resp_body)))
-        self.assertUpdateStats('SOS.GET.200.xfer', len(resp_body), app)
+        self.assertUpdateStats([('SOS.GET.200.xfer', len(resp_body))], app)
 
     def test_log_headers(self):
         for conf_key in ['access_log_headers', 'log_headers']:
@@ -348,7 +441,7 @@ class TestProxyLogging(unittest.TestCase):
             [x for x in resp]
             log_parts = self._log_parts(app)
             headers = unquote(log_parts[14]).split('\n')
-            self.assert_('Host: localhost:80' in headers)
+            self.assertTrue('Host: localhost:80' in headers)
 
     def test_access_log_headers_only(self):
         app = proxy_logging.ProxyLoggingMiddleware(
@@ -365,27 +458,66 @@ class TestProxyLogging(unittest.TestCase):
         [x for x in resp]
         log_parts = self._log_parts(app)
         headers = unquote(log_parts[14]).split('\n')
-        self.assert_('First: 1' in headers)
-        self.assert_('Second: 2' in headers)
-        self.assert_('Third: 3' not in headers)
-        self.assert_('Host: localhost:80' not in headers)
+        self.assertTrue('First: 1' in headers)
+        self.assertTrue('Second: 2' in headers)
+        self.assertTrue('Third: 3' not in headers)
+        self.assertTrue('Host: localhost:80' not in headers)
 
     def test_upload_size(self):
+        # Using default policy
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(),
                                                    {'log_headers': 'yes'})
         app.access_logger = FakeLogger()
         req = Request.blank(
             '/v1/a/c/o/foo',
             environ={'REQUEST_METHOD': 'PUT',
-                     'wsgi.input': StringIO.StringIO('some stuff')})
+                     'wsgi.input': BytesIO(b'some stuff')})
         resp = app(req.environ, start_response)
         # exhaust generator
         [x for x in resp]
         log_parts = self._log_parts(app)
         self.assertEquals(log_parts[11], str(len('FAKE APP')))
         self.assertEquals(log_parts[10], str(len('some stuff')))
-        self.assertUpdateStats('object.PUT.200.xfer',
-                               len('some stuff') + len('FAKE APP'),
+        self.assertUpdateStats([('object.PUT.200.xfer',
+                                 len('some stuff') + len('FAKE APP')),
+                                ('object.policy.0.PUT.200.xfer',
+                                 len('some stuff') + len('FAKE APP'))],
+                               app)
+
+        # Using a non-existent policy
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(policy_idx='-1'),
+                                                   {'log_headers': 'yes'})
+        app.access_logger = FakeLogger()
+        req = Request.blank(
+            '/v1/a/c/o/foo',
+            environ={'REQUEST_METHOD': 'PUT',
+                     'wsgi.input': BytesIO(b'some stuff')})
+        resp = app(req.environ, start_response)
+        # exhaust generator
+        [x for x in resp]
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[11], str(len('FAKE APP')))
+        self.assertEquals(log_parts[10], str(len('some stuff')))
+        self.assertUpdateStats([('object.PUT.200.xfer',
+                                 len('some stuff') + len('FAKE APP'))],
+                               app)
+
+    def test_upload_size_no_policy(self):
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(policy_idx=None),
+                                                   {'log_headers': 'yes'})
+        app.access_logger = FakeLogger()
+        req = Request.blank(
+            '/v1/a/c/o/foo',
+            environ={'REQUEST_METHOD': 'PUT',
+                     'wsgi.input': BytesIO(b'some stuff')})
+        resp = app(req.environ, start_response)
+        # exhaust generator
+        [x for x in resp]
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[11], str(len('FAKE APP')))
+        self.assertEquals(log_parts[10], str(len('some stuff')))
+        self.assertUpdateStats([('object.PUT.200.xfer',
+                                 len('some stuff') + len('FAKE APP'))],
                                app)
 
     def test_upload_line(self):
@@ -395,16 +527,15 @@ class TestProxyLogging(unittest.TestCase):
         req = Request.blank(
             '/v1/a/c',
             environ={'REQUEST_METHOD': 'POST',
-                     'wsgi.input': StringIO.StringIO(
-                         'some stuff\nsome other stuff\n')})
+                     'wsgi.input': BytesIO(b'some stuff\nsome other stuff\n')})
         resp = app(req.environ, start_response)
         # exhaust generator
         [x for x in resp]
         log_parts = self._log_parts(app)
         self.assertEquals(log_parts[11], str(len('FAKE APP')))
         self.assertEquals(log_parts[10], str(len('some stuff\n')))
-        self.assertUpdateStats('container.POST.200.xfer',
-                               len('some stuff\n') + len('FAKE APP'),
+        self.assertUpdateStats([('container.POST.200.xfer',
+                               len('some stuff\n') + len('FAKE APP'))],
                                app)
 
     def test_log_query_string(self):
@@ -429,6 +560,27 @@ class TestProxyLogging(unittest.TestCase):
         log_parts = self._log_parts(app)
         self.assertEquals(log_parts[0], '1.2.3.4')  # client ip
         self.assertEquals(log_parts[1], '1.2.3.4')  # remote addr
+
+    def test_iterator_closing(self):
+
+        class CloseableBody(object):
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+            def __iter__(self):
+                return iter(["CloseableBody"])
+
+        body = CloseableBody()
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(body), {})
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
+                                          'REMOTE_ADDR': '1.2.3.4'})
+        resp = app(req.environ, start_response)
+        # exhaust generator
+        [x for x in resp]
+        self.assertTrue(body.closed)
 
     def test_proxy_client_logging(self):
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
@@ -467,8 +619,8 @@ class TestProxyLogging(unittest.TestCase):
 
     def test_filter(self):
         factory = proxy_logging.filter_factory({})
-        self.assert_(callable(factory))
-        self.assert_(callable(factory(FakeApp())))
+        self.assertTrue(callable(factory))
+        self.assertTrue(callable(factory(FakeApp())))
 
     def test_unread_body(self):
         app = proxy_logging.ProxyLoggingMiddleware(
@@ -530,7 +682,7 @@ class TestProxyLogging(unittest.TestCase):
     def test_no_content_length_no_transfer_encoding_with_list_body(self):
         app = proxy_logging.ProxyLoggingMiddleware(
             FakeAppNoContentLengthNoTransferEncoding(
-                # test the "while not chunk: chunk = iterator.next()"
+                # test the "while not chunk: chunk = next(iterator)"
                 body=['', '', 'line1\n', 'line2\n'],
             ), {})
         app.access_logger = FakeLogger()
@@ -548,7 +700,7 @@ class TestProxyLogging(unittest.TestCase):
     def test_no_content_length_no_transfer_encoding_with_empty_strings(self):
         app = proxy_logging.ProxyLoggingMiddleware(
             FakeAppNoContentLengthNoTransferEncoding(
-                # test the "while not chunk: chunk = iterator.next()"
+                # test the "while not chunk: chunk = next(iterator)"
                 body=['', '', ''],
             ), {})
         app.access_logger = FakeLogger()
@@ -752,7 +904,7 @@ class TestProxyLogging(unittest.TestCase):
             resp = app(req.environ, start_response)
             resp_body = ''.join(resp)
         log_parts = self._log_parts(app)
-        self.assertEquals(len(log_parts), 20)
+        self.assertEquals(len(log_parts), 21)
         self.assertEquals(log_parts[0], '-')
         self.assertEquals(log_parts[1], '-')
         self.assertEquals(log_parts[2], '26/Apr/1970/17/46/41')
@@ -774,6 +926,7 @@ class TestProxyLogging(unittest.TestCase):
         self.assertEquals(log_parts[17], '-')
         self.assertEquals(log_parts[18], '10000000.000000000')
         self.assertEquals(log_parts[19], '10000001.000000000')
+        self.assertEquals(log_parts[20], '-')
 
     def test_dual_logging_middlewares(self):
         # Since no internal request is being made, outer most proxy logging
@@ -855,6 +1008,38 @@ class TestProxyLogging(unittest.TestCase):
         self.assertEquals(log_parts[6], '200')
         self.assertEquals(resp_body, 'FAKE MIDDLEWARE')
         self.assertEquals(log_parts[11], str(len(resp_body)))
+
+    def test_policy_index(self):
+        # Policy index can be specified by X-Backend-Storage-Policy-Index
+        # in the request header for object API
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(policy_idx='1'), {})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'})
+        resp = app(req.environ, start_response)
+        ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[20], '1')
+
+        # Policy index can be specified by X-Backend-Storage-Policy-Index
+        # in the response header for container API
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/v1/a/c', environ={'REQUEST_METHOD': 'GET'})
+
+        def fake_call(app, env, start_response):
+            start_response(app.response_str,
+                           [('Content-Type', 'text/plain'),
+                            ('Content-Length', str(sum(map(len, app.body)))),
+                            ('X-Backend-Storage-Policy-Index', '1')])
+            while env['wsgi.input'].read(5):
+                pass
+            return app.body
+
+        with mock.patch.object(FakeApp, '__call__', fake_call):
+            resp = app(req.environ, start_response)
+            ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[20], '1')
 
 
 if __name__ == '__main__':

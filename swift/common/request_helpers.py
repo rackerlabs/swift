@@ -22,15 +22,19 @@ from swob in here without creating circular imports.
 
 import hashlib
 import itertools
+import sys
 import time
-from contextlib import contextmanager
 from urllib import unquote
 from swift import gettext_ as _
+from swift.common.storage_policy import POLICIES
 from swift.common.constraints import FORMAT2CONTENT_TYPE
 from swift.common.exceptions import ListingIterError, SegmentError
 from swift.common.http import is_success
-from swift.common.swob import HTTPBadRequest, HTTPNotAcceptable
-from swift.common.utils import split_path, validate_device_partition
+from swift.common.swob import (HTTPBadRequest, HTTPNotAcceptable,
+                               HTTPServiceUnavailable, Range)
+from swift.common.utils import split_path, validate_device_partition, \
+    close_if_possible, maybe_multipart_byteranges_to_document_iters
+
 from swift.common.wsgi import make_subrequest
 
 
@@ -82,21 +86,27 @@ def get_listing_content_type(req):
 def get_name_and_placement(request, minsegs=1, maxsegs=None,
                            rest_with_last=False):
     """
-    Utility function to split and validate the request path and
-    storage_policy_index.  The storage_policy_index is extracted from
-    the headers of the request and converted to an integer, and then the
-    args are passed through to :meth:`split_and_validate_path`.
+    Utility function to split and validate the request path and storage
+    policy.  The storage policy index is extracted from the headers of
+    the request and converted to a StoragePolicy instance.  The
+    remaining args are passed through to
+    :meth:`split_and_validate_path`.
 
     :returns: a list, result of :meth:`split_and_validate_path` with
-              storage_policy_index appended on the end
-    :raises: HTTPBadRequest
+              the BaseStoragePolicy instance appended on the end
+    :raises: HTTPServiceUnavailable if the path is invalid or no policy exists
+             with the extracted policy_index.
     """
-    policy_idx = request.headers.get('X-Backend-Storage-Policy-Index', '0')
-    policy_idx = int(policy_idx)
+    policy_index = request.headers.get('X-Backend-Storage-Policy-Index')
+    policy = POLICIES.get_by_index(policy_index)
+    if not policy:
+        raise HTTPServiceUnavailable(
+            body=_("No policy with index %s") % policy_index,
+            request=request, content_type='text/plain')
     results = split_and_validate_path(request, minsegs=minsegs,
                                       maxsegs=maxsegs,
                                       rest_with_last=rest_with_last)
-    results.append(policy_idx)
+    results.append(policy)
     return results
 
 
@@ -241,26 +251,6 @@ def copy_header_subset(from_r, to_r, condition):
             to_r.headers[k] = v
 
 
-def close_if_possible(maybe_closable):
-    close_method = getattr(maybe_closable, 'close', None)
-    if callable(close_method):
-        return close_method()
-
-
-@contextmanager
-def closing_if_possible(maybe_closable):
-    """
-    Like contextlib.closing(), but doesn't crash if the object lacks a close()
-    method.
-
-    PEP 333 (WSGI) says: "If the iterable returned by the application has a
-    close() method, the server or gateway must call that method upon
-    completion of the current request[.]" This function makes that easier.
-    """
-    yield maybe_closable
-    close_if_possible(maybe_closable)
-
-
 class SegmentedIterable(object):
     """
     Iterable that returns the object contents for a large object.
@@ -296,14 +286,19 @@ class SegmentedIterable(object):
         self.peeked_chunk = None
         self.app_iter = self._internal_iter()
         self.validated_first_segment = False
+        self.current_resp = None
 
-    def _internal_iter(self):
+    def _coalesce_requests(self):
         start_time = time.time()
-        bytes_left = self.response_body_length
-
+        pending_req = None
+        pending_etag = None
+        pending_size = None
         try:
             for seg_path, seg_etag, seg_size, first_byte, last_byte \
                     in self.listing_iter:
+                first_byte = first_byte or 0
+                go_to_end = last_byte is None or (
+                    seg_size is not None and last_byte == seg_size - 1)
                 if time.time() - start_time > self.max_get_time:
                     raise SegmentError(
                         'ERROR: While processing manifest %s, '
@@ -318,20 +313,62 @@ class SegmentedIterable(object):
                         'x-auth-token')},
                     agent=('%(orig)s ' + self.ua_suffix),
                     swift_source=self.swift_source)
-                if first_byte is not None or last_byte is not None:
-                    seg_req.headers['Range'] = "bytes=%s-%s" % (
-                        # The 0 is to avoid having a range like "bytes=-10",
-                        # which actually means the *last* 10 bytes.
-                        '0' if first_byte is None else first_byte,
-                        '' if last_byte is None else last_byte)
 
+                if first_byte != 0 or not go_to_end:
+                    seg_req.headers['Range'] = "bytes=%s-%s" % (
+                        first_byte, '' if go_to_end else last_byte)
+
+                # We can only coalesce if paths match and we know the segment
+                # size (so we can check that the ranges will be allowed)
+                if pending_req and pending_req.path == seg_req.path and \
+                        seg_size is not None:
+                    new_range = '%s,%s' % (
+                        pending_req.headers.get('Range',
+                                                'bytes=0-%s' % (seg_size - 1)),
+                        seg_req.headers['Range'].split('bytes=')[1])
+                    if Range(new_range).ranges_for_length(seg_size):
+                        # Good news! We can coalesce the requests
+                        pending_req.headers['Range'] = new_range
+                        continue
+                    # else, Too many ranges, or too much backtracking, or ...
+
+                if pending_req:
+                    yield pending_req, pending_etag, pending_size
+                pending_req = seg_req
+                pending_etag = seg_etag
+                pending_size = seg_size
+
+        except ListingIterError:
+            e_type, e_value, e_traceback = sys.exc_info()
+            if time.time() - start_time > self.max_get_time:
+                raise SegmentError(
+                    'ERROR: While processing manifest %s, '
+                    'max LO GET time of %ds exceeded' %
+                    (self.name, self.max_get_time))
+            if pending_req:
+                yield pending_req, pending_etag, pending_size
+            raise e_type, e_value, e_traceback
+
+        if time.time() - start_time > self.max_get_time:
+            raise SegmentError(
+                'ERROR: While processing manifest %s, '
+                'max LO GET time of %ds exceeded' %
+                (self.name, self.max_get_time))
+        if pending_req:
+            yield pending_req, pending_etag, pending_size
+
+    def _internal_iter(self):
+        bytes_left = self.response_body_length
+
+        try:
+            for seg_req, seg_etag, seg_size in self._coalesce_requests():
                 seg_resp = seg_req.get_response(self.app)
                 if not is_success(seg_resp.status_int):
                     close_if_possible(seg_resp.app_iter)
                     raise SegmentError(
                         'ERROR: While processing manifest %s, '
                         'got %d while retrieving %s' %
-                        (self.name, seg_resp.status_int, seg_path))
+                        (self.name, seg_resp.status_int, seg_req.path))
 
                 elif ((seg_etag and (seg_resp.etag != seg_etag)) or
                         (seg_size and (seg_resp.content_length != seg_size) and
@@ -352,10 +389,22 @@ class SegmentedIterable(object):
                          'r_size': seg_resp.content_length,
                          's_etag': seg_etag,
                          's_size': seg_size})
+                else:
+                    self.current_resp = seg_resp
 
-                seg_hash = hashlib.md5()
-                for chunk in seg_resp.app_iter:
-                    seg_hash.update(chunk)
+                seg_hash = None
+                if seg_resp.etag and not seg_req.headers.get('Range'):
+                    # Only calculate the MD5 if it we can use it to validate
+                    seg_hash = hashlib.md5()
+
+                document_iters = maybe_multipart_byteranges_to_document_iters(
+                    seg_resp.app_iter,
+                    seg_resp.headers['Content-Type'])
+
+                for chunk in itertools.chain.from_iterable(document_iters):
+                    if seg_hash:
+                        seg_hash.update(chunk)
+
                     if bytes_left is None:
                         yield chunk
                     elif bytes_left >= len(chunk):
@@ -372,8 +421,7 @@ class SegmentedIterable(object):
                              'left': bytes_left})
                 close_if_possible(seg_resp.app_iter)
 
-                if seg_resp.etag and seg_hash.hexdigest() != seg_resp.etag \
-                   and first_byte is None and last_byte is None:
+                if seg_hash and seg_hash.hexdigest() != seg_resp.etag:
                     raise SegmentError(
                         "Bad MD5 checksum in %(name)s for %(seg)s: headers had"
                         " %(etag)s, but object MD5 was actually %(actual)s" %
@@ -387,6 +435,9 @@ class SegmentedIterable(object):
             self.logger.exception(_('ERROR: An error occurred '
                                     'while retrieving segments'))
             raise
+        finally:
+            if self.current_resp:
+                close_if_possible(self.current_resp.app_iter)
 
     def app_iter_range(self, *a, **kw):
         """
@@ -412,7 +463,7 @@ class SegmentedIterable(object):
         self.validated_first_segment = True
 
         try:
-            self.peeked_chunk = self.app_iter.next()
+            self.peeked_chunk = next(self.app_iter)
         except StopIteration:
             pass
 
@@ -423,3 +474,10 @@ class SegmentedIterable(object):
             return itertools.chain([pc], self.app_iter)
         else:
             return self.app_iter
+
+    def close(self):
+        """
+        Called when the client disconnect. Ensure that the connection to the
+        backend server is closed.
+        """
+        close_if_possible(self.app_iter)

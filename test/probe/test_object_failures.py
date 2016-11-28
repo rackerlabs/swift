@@ -17,7 +17,7 @@
 import time
 from os import listdir, unlink
 from os.path import join as path_join
-from unittest import main, TestCase
+from unittest import main
 from uuid import uuid4
 
 from swiftclient import client
@@ -26,7 +26,7 @@ from swift.common import direct_client
 from swift.common.exceptions import ClientException
 from swift.common.utils import hash_path, readconf
 from swift.obj.diskfile import write_metadata, read_metadata, get_data_dir
-from test.probe.common import kill_servers, reset_environment
+from test.probe.common import ReplProbeTest
 
 
 RETRIES = 5
@@ -36,7 +36,7 @@ def get_data_file_path(obj_dir):
     files = []
     # We might need to try a few times if a request hasn't yet settled. For
     # instance, a PUT can return success when just 2 of 3 nodes has completed.
-    for attempt in xrange(RETRIES + 1):
+    for attempt in range(RETRIES + 1):
         try:
             files = sorted(listdir(obj_dir), reverse=True)
             break
@@ -49,21 +49,15 @@ def get_data_file_path(obj_dir):
         return path_join(obj_dir, filename)
 
 
-class TestObjectFailures(TestCase):
-
-    def setUp(self):
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
-
-    def tearDown(self):
-        kill_servers(self.port2server, self.pids)
+class TestObjectFailures(ReplProbeTest):
 
     def _setup_data_file(self, container, obj, data):
-        client.put_container(self.url, self.token, container)
+        client.put_container(self.url, self.token, container,
+                             headers={'X-Storage-Policy':
+                                      self.policy.name})
         client.put_object(self.url, self.token, container, obj, data)
         odata = client.get_object(self.url, self.token, container, obj)[-1]
-        self.assertEquals(odata, data)
+        self.assertEqual(odata, data)
         opart, onodes = self.object_ring.get_nodes(
             self.account, container, obj)
         onode = onodes[0]
@@ -73,7 +67,7 @@ class TestObjectFailures(TestCase):
         obj_server_conf = readconf(self.configs['object-server'][node_id])
         devices = obj_server_conf['app:object-server']['devices']
         obj_dir = '%s/%s/%s/%s/%s/%s/' % (devices, device,
-                                          get_data_dir(self.policy.idx),
+                                          get_data_dir(self.policy),
                                           opart, hash_str[-3:], hash_str)
         data_file = get_data_file_path(obj_dir)
         return onode, opart, data_file
@@ -90,14 +84,14 @@ class TestObjectFailures(TestCase):
         odata = direct_client.direct_get_object(
             onode, opart, self.account, container, obj, headers={
                 'X-Backend-Storage-Policy-Index': self.policy.idx})[-1]
-        self.assertEquals(odata, 'VERIFY')
+        self.assertEqual(odata, 'VERIFY')
         try:
             direct_client.direct_get_object(
                 onode, opart, self.account, container, obj, headers={
                     'X-Backend-Storage-Policy-Index': self.policy.idx})
             raise Exception("Did not quarantine object")
         except ClientException as err:
-            self.assertEquals(err.http_status, 404)
+            self.assertEqual(err.http_status, 404)
 
     def run_quarantine_range_etag(self):
         container = 'container-range-%s' % uuid4()
@@ -117,7 +111,7 @@ class TestObjectFailures(TestCase):
             odata = direct_client.direct_get_object(
                 onode, opart, self.account, container, obj,
                 headers=req_headers)[-1]
-            self.assertEquals(odata, result)
+            self.assertEqual(odata, result)
 
         try:
             direct_client.direct_get_object(
@@ -125,7 +119,7 @@ class TestObjectFailures(TestCase):
                     'X-Backend-Storage-Policy-Index': self.policy.idx})
             raise Exception("Did not quarantine object")
         except ClientException as err:
-            self.assertEquals(err.http_status, 404)
+            self.assertEqual(err.http_status, 404)
 
     def run_quarantine_zero_byte_get(self):
         container = 'container-zbyte-%s' % uuid4()
@@ -143,7 +137,7 @@ class TestObjectFailures(TestCase):
                                              self.policy.idx})
             raise Exception("Did not quarantine object")
         except ClientException as err:
-            self.assertEquals(err.http_status, 404)
+            self.assertEqual(err.http_status, 404)
 
     def run_quarantine_zero_byte_head(self):
         container = 'container-zbyte-%s' % uuid4()
@@ -161,7 +155,7 @@ class TestObjectFailures(TestCase):
                                              self.policy.idx})
             raise Exception("Did not quarantine object")
         except ClientException as err:
-            self.assertEquals(err.http_status, 404)
+            self.assertEqual(err.http_status, 404)
 
     def run_quarantine_zero_byte_post(self):
         container = 'container-zbyte-%s' % uuid4()
@@ -183,7 +177,7 @@ class TestObjectFailures(TestCase):
                 response_timeout=1)
             raise Exception("Did not quarantine object")
         except ClientException as err:
-            self.assertEquals(err.http_status, 404)
+            self.assertEqual(err.http_status, 404)
 
     def test_runner(self):
         self.run_quarantine()

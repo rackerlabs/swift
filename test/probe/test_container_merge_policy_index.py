@@ -14,9 +14,9 @@
 
 from hashlib import md5
 import time
-import unittest
 import uuid
 import random
+import unittest
 
 from nose import SkipTest
 
@@ -26,21 +26,20 @@ from swift.common import utils, direct_client
 from swift.common.storage_policy import POLICIES
 from swift.common.http import HTTP_NOT_FOUND
 from test.probe.brain import BrainSplitter
-from test.probe.common import reset_environment, get_to_final_state
+from test.probe.common import (ReplProbeTest, ENABLED_POLICIES,
+                               POLICIES_BY_TYPE, REPL_POLICY)
 
 from swiftclient import client, ClientException
 
 TIMEOUT = 60
 
 
-class TestContainerMergePolicyIndex(unittest.TestCase):
+class TestContainerMergePolicyIndex(ReplProbeTest):
 
     def setUp(self):
-        if len(POLICIES) < 2:
-            raise SkipTest()
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
+        if len(ENABLED_POLICIES) < 2:
+            raise SkipTest('Need more than one policy')
+        super(TestContainerMergePolicyIndex, self).setUp()
         self.container_name = 'container-%s' % uuid.uuid4()
         self.object_name = 'object-%s' % uuid.uuid4()
         self.brain = BrainSplitter(self.url, self.token, self.container_name,
@@ -66,9 +65,10 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
         found_policy_indexes = \
             set(metadata['X-Backend-Storage-Policy-Index'] for
                 node, metadata in head_responses)
-        self.assert_(len(found_policy_indexes) > 1,
-                     'primary nodes did not disagree about policy index %r' %
-                     head_responses)
+        self.assertTrue(
+            len(found_policy_indexes) > 1,
+            'primary nodes did not disagree about policy index %r' %
+            head_responses)
         # find our object
         orig_policy_index = None
         for policy_index in found_policy_indexes:
@@ -92,7 +92,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
             self.fail('Unable to find /%s/%s/%s in %r' % (
                 self.account, self.container_name, self.object_name,
                 found_policy_indexes))
-        get_to_final_state()
+        self.get_to_final_state()
         Manager(['container-reconciler']).once()
         # validate containers
         head_responses = []
@@ -103,9 +103,9 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
         found_policy_indexes = \
             set(metadata['X-Backend-Storage-Policy-Index'] for
                 node, metadata in head_responses)
-        self.assert_(len(found_policy_indexes) == 1,
-                     'primary nodes disagree about policy index %r' %
-                     head_responses)
+        self.assertTrue(len(found_policy_indexes) == 1,
+                        'primary nodes disagree about policy index %r' %
+                        head_responses)
 
         expected_policy_index = found_policy_indexes.pop()
         self.assertNotEqual(orig_policy_index, expected_policy_index)
@@ -166,9 +166,10 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
         found_policy_indexes = \
             set(metadata['X-Backend-Storage-Policy-Index'] for
                 node, metadata in head_responses)
-        self.assert_(len(found_policy_indexes) > 1,
-                     'primary nodes did not disagree about policy index %r' %
-                     head_responses)
+        self.assertTrue(
+            len(found_policy_indexes) > 1,
+            'primary nodes did not disagree about policy index %r' %
+            head_responses)
         # find our object
         orig_policy_index = ts_policy_index = None
         for policy_index in found_policy_indexes:
@@ -197,7 +198,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
             self.fail('Unable to find tombstone /%s/%s/%s in %r' % (
                 self.account, self.container_name, self.object_name,
                 found_policy_indexes))
-        get_to_final_state()
+        self.get_to_final_state()
         Manager(['container-reconciler']).once()
         # validate containers
         head_responses = []
@@ -208,11 +209,11 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
         new_found_policy_indexes = \
             set(metadata['X-Backend-Storage-Policy-Index'] for node,
                 metadata in head_responses)
-        self.assert_(len(new_found_policy_indexes) == 1,
-                     'primary nodes disagree about policy index %r' %
-                     dict((node['port'],
-                           metadata['X-Backend-Storage-Policy-Index'])
-                          for node, metadata in head_responses))
+        self.assertTrue(len(new_found_policy_indexes) == 1,
+                        'primary nodes disagree about policy index %r' %
+                        dict((node['port'],
+                             metadata['X-Backend-Storage-Policy-Index'])
+                             for node, metadata in head_responses))
         expected_policy_index = new_found_policy_indexes.pop()
         self.assertEqual(orig_policy_index, expected_policy_index)
         # validate object fully deleted
@@ -236,6 +237,18 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
                         orig_policy_index, node))
 
     def test_reconcile_manifest(self):
+        # this test is not only testing a split brain scenario on
+        # multiple policies with mis-placed objects - it even writes out
+        # a static large object directly to the storage nodes while the
+        # objects are unavailably mis-placed from *behind* the proxy and
+        # doesn't know how to do that for EC_POLICY (clayg: why did you
+        # guys let me write a test that does this!?) - so we force
+        # wrong_policy (where the manifest gets written) to be one of
+        # any of your configured REPL_POLICY (we know you have one
+        # because this is a ReplProbeTest)
+        wrong_policy = random.choice(POLICIES_BY_TYPE[REPL_POLICY])
+        policy = random.choice([p for p in ENABLED_POLICIES
+                                if p is not wrong_policy])
         manifest_data = []
 
         def write_part(i):
@@ -252,16 +265,14 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
 
         # get an old container stashed
         self.brain.stop_primary_half()
-        policy = random.choice(list(POLICIES))
-        self.brain.put_container(policy.idx)
+        self.brain.put_container(int(policy))
         self.brain.start_primary_half()
         # write some parts
         for i in range(10):
             write_part(i)
 
         self.brain.stop_handoff_half()
-        wrong_policy = random.choice([p for p in POLICIES if p is not policy])
-        self.brain.put_container(wrong_policy.idx)
+        self.brain.put_container(int(wrong_policy))
         # write some more parts
         for i in range(10, 20):
             write_part(i)
@@ -313,7 +324,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
             break  # one should do it...
 
         self.brain.start_handoff_half()
-        get_to_final_state()
+        self.get_to_final_state()
         Manager(['container-reconciler']).once()
         # clear proxy cache
         client.post_container(self.url, self.token, self.container_name, {})
@@ -325,7 +336,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
         self.assertEqual(metadata['x-static-large-object'].lower(), 'true')
         for i, entry in enumerate(utils.json.loads(body)):
             for key in ('hash', 'bytes', 'name'):
-                self.assertEquals(entry[key], direct_manifest_data[i][key])
+                self.assertEqual(entry[key], direct_manifest_data[i][key])
         metadata, body = client.get_object(
             self.url, self.token, self.container_name, direct_manifest_name)
         self.assertEqual(metadata['x-static-large-object'].lower(), 'true')
@@ -347,8 +358,9 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
 
     def test_reconciler_move_object_twice(self):
         # select some policies
-        old_policy = random.choice(list(POLICIES))
-        new_policy = random.choice([p for p in POLICIES if p != old_policy])
+        old_policy = random.choice(ENABLED_POLICIES)
+        new_policy = random.choice([p for p in ENABLED_POLICIES
+                                    if p != old_policy])
 
         # setup a split brain
         self.brain.stop_handoff_half()
@@ -423,7 +435,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
             acceptable_statuses=(4,),
             headers={'X-Backend-Storage-Policy-Index': int(new_policy)})
 
-        get_to_final_state()
+        self.get_to_final_state()
 
         # verify entry in the queue
         client = InternalClient(conf_file, 'probe-test', 3)
@@ -447,7 +459,7 @@ class TestContainerMergePolicyIndex(unittest.TestCase):
             headers={'X-Backend-Storage-Policy-Index': int(old_policy)})
 
         # make sure the queue is settled
-        get_to_final_state()
+        self.get_to_final_state()
         for container in client.iter_containers('.misplaced_objects'):
             for obj in client.iter_objects('.misplaced_objects',
                                            container['name']):

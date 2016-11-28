@@ -81,10 +81,13 @@ Using this in combination with browser form post translation
 middleware could also allow direct-from-browser uploads to specific
 locations in Swift.
 
-TempURL supports up to two keys, specified by X-Account-Meta-Temp-URL-Key and
-X-Account-Meta-Temp-URL-Key-2. Signatures are checked against both keys, if
-present. This is to allow for key rotation without invalidating all existing
-temporary URLs.
+TempURL supports both account and container level keys.  Each allows up to two
+keys to be set, allowing key rotation without invalidating all existing
+temporary URLs.  Account keys are specified by X-Account-Meta-Temp-URL-Key and
+X-Account-Meta-Temp-URL-Key-2, while container keys are specified by
+X-Container-Meta-Temp-URL-Key and X-Container-Meta-Temp-URL-Key-2.
+Signatures are checked against account and container keys, if
+present.
 
 With GET TempURLs, a Content-Disposition header will be set on the
 response so that browsers will interpret this as a file attachment to
@@ -118,11 +121,13 @@ from time import time
 from urllib import urlencode
 from urlparse import parse_qs
 
-from swift.proxy.controllers.base import get_account_info
-from swift.common.swob import HeaderKeyDict, HTTPUnauthorized
+from swift.proxy.controllers.base import get_account_info, get_container_info
+from swift.common.swob import HeaderKeyDict, HTTPUnauthorized, HTTPBadRequest
 from swift.common.utils import split_path, get_valid_utf8_str, \
     register_swift_info, get_hmac, streq_const_time, quote
 
+
+DISALLOWED_INCOMING_HEADERS = 'x-object-manifest'
 
 #: Default headers to remove from incoming requests. Simply a whitespace
 #: delimited list of header names and names can optionally end with '*' to
@@ -147,6 +152,10 @@ DEFAULT_OUTGOING_REMOVE_HEADERS = 'x-object-meta-*'
 DEFAULT_OUTGOING_ALLOW_HEADERS = 'x-object-meta-public-*'
 
 
+CONTAINER_SCOPE = 'container'
+ACCOUNT_SCOPE = 'account'
+
+
 def get_tempurl_keys_from_metadata(meta):
     """
     Extracts the tempurl keys from metadata.
@@ -158,13 +167,45 @@ def get_tempurl_keys_from_metadata(meta):
       meta = get_account_info(...)['meta']
       keys = get_tempurl_keys_from_metadata(meta)
     """
-    return [get_valid_utf8_str(value) for key, value in meta.iteritems()
+    return [get_valid_utf8_str(value) for key, value in meta.items()
             if key.lower() in ('temp-url-key', 'temp-url-key-2')]
 
 
 def disposition_format(filename):
     return '''attachment; filename="%s"; filename*=UTF-8''%s''' % (
         quote(filename, safe=' /'), quote(filename))
+
+
+def authorize_same_account(account_to_match):
+
+    def auth_callback_same_account(req):
+        try:
+            _ver, acc, _rest = req.split_path(2, 3, True)
+        except ValueError:
+            return HTTPUnauthorized(request=req)
+
+        if acc == account_to_match:
+            return None
+        else:
+            return HTTPUnauthorized(request=req)
+
+    return auth_callback_same_account
+
+
+def authorize_same_container(account_to_match, container_to_match):
+
+    def auth_callback_same_container(req):
+        try:
+            _ver, acc, con, _rest = req.split_path(3, 4, True)
+        except ValueError:
+            return HTTPUnauthorized(request=req)
+
+        if acc == account_to_match and con == container_to_match:
+            return None
+        else:
+            return HTTPUnauthorized(request=req)
+
+    return auth_callback_same_container
 
 
 class TempURL(object):
@@ -226,6 +267,10 @@ class TempURL(object):
 
         #: The methods allowed with Temp URLs.
         self.methods = methods
+
+        self.disallowed_headers = set(
+            'HTTP_' + h.upper().replace('-', '_')
+            for h in DISALLOWED_INCOMING_HEADERS.split())
 
         headers = DEFAULT_INCOMING_REMOVE_HEADERS
         if 'incoming_remove_headers' in conf:
@@ -295,10 +340,10 @@ class TempURL(object):
             return self.app(env, start_response)
         if not temp_url_sig or not temp_url_expires:
             return self._invalid(env, start_response)
-        account = self._get_account(env)
+        account, container = self._get_account_and_container(env)
         if not account:
             return self._invalid(env, start_response)
-        keys = self._get_keys(env, account)
+        keys = self._get_keys(env)
         if not keys:
             return self._invalid(env, start_response)
         if env['REQUEST_METHOD'] == 'HEAD':
@@ -313,15 +358,32 @@ class TempURL(object):
         else:
             hmac_vals = self._get_hmacs(env, temp_url_expires, keys)
 
-        # While it's true that any() will short-circuit, this doesn't affect
-        # the timing-attack resistance since the only way this will
-        # short-circuit is when a valid signature is passed in.
-        is_valid_hmac = any(streq_const_time(temp_url_sig, hmac)
-                            for hmac in hmac_vals)
+        is_valid_hmac = False
+        hmac_scope = None
+        for hmac, scope in hmac_vals:
+            # While it's true that we short-circuit, this doesn't affect the
+            # timing-attack resistance since the only way this will
+            # short-circuit is when a valid signature is passed in.
+            if streq_const_time(temp_url_sig, hmac):
+                is_valid_hmac = True
+                hmac_scope = scope
+                break
         if not is_valid_hmac:
             return self._invalid(env, start_response)
+        # disallowed headers prevent accidently allowing upload of a pointer
+        # to data that the PUT tempurl would not otherwise allow access for.
+        # It should be safe to provide a GET tempurl for data that an
+        # untrusted client just uploaded with a PUT tempurl.
+        resp = self._clean_disallowed_headers(env, start_response)
+        if resp:
+            return resp
         self._clean_incoming_headers(env)
-        env['swift.authorize'] = lambda req: None
+
+        if hmac_scope == ACCOUNT_SCOPE:
+            env['swift.authorize'] = authorize_same_account(account)
+        else:
+            env['swift.authorize'] = authorize_same_container(account,
+                                                              container)
         env['swift.authorize_override'] = True
         env['REMOTE_USER'] = '.wsgi.tempurl'
         qs = {'temp_url_sig': temp_url_sig,
@@ -362,22 +424,23 @@ class TempURL(object):
 
         return self.app(env, _start_response)
 
-    def _get_account(self, env):
+    def _get_account_and_container(self, env):
         """
-        Returns just the account for the request, if it's an object
-        request and one of the configured methods; otherwise, None is
+        Returns just the account and container for the request, if it's an
+        object request and one of the configured methods; otherwise, None is
         returned.
 
         :param env: The WSGI environment for the request.
-        :returns: Account str or None.
+        :returns: (Account str, container str) or (None, None).
         """
         if env['REQUEST_METHOD'] in self.methods:
             try:
                 ver, acc, cont, obj = split_path(env['PATH_INFO'], 4, 4, True)
             except ValueError:
-                return None
+                return (None, None)
             if ver == 'v1' and obj.strip('/'):
-                return acc
+                return (acc, cont)
+        return (None, None)
 
     def _get_temp_url_info(self, env):
         """
@@ -407,39 +470,53 @@ class TempURL(object):
             inline = True
         return temp_url_sig, temp_url_expires, filename, inline
 
-    def _get_keys(self, env, account):
+    def _get_keys(self, env):
         """
-        Returns the X-Account-Meta-Temp-URL-Key[-2] header values for the
-        account, or an empty list if none is set.
+        Returns the X-[Account|Container]-Meta-Temp-URL-Key[-2] header values
+        for the account or container, or an empty list if none are set. Each
+        value comes as a 2-tuple (key, scope), where scope is either
+        CONTAINER_SCOPE or ACCOUNT_SCOPE.
 
-        Returns 0, 1, or 2 elements depending on how many keys are set
-        in the account's metadata.
+        Returns 0-4 elements depending on how many keys are set in the
+        account's or container's metadata.
 
         :param env: The WSGI environment for the request.
-        :param account: Account str.
-        :returns: [X-Account-Meta-Temp-URL-Key str value if set,
-                   X-Account-Meta-Temp-URL-Key-2 str value if set]
+        :returns: [
+            (X-Account-Meta-Temp-URL-Key str value, ACCOUNT_SCOPE) if set,
+            (X-Account-Meta-Temp-URL-Key-2 str value, ACCOUNT_SCOPE if set,
+            (X-Container-Meta-Temp-URL-Key str value, CONTAINER_SCOPE) if set,
+            (X-Container-Meta-Temp-URL-Key-2 str value, CONTAINER_SCOPE if set,
+        ]
         """
         account_info = get_account_info(env, self.app, swift_source='TU')
-        return get_tempurl_keys_from_metadata(account_info['meta'])
+        account_keys = get_tempurl_keys_from_metadata(account_info['meta'])
 
-    def _get_hmacs(self, env, expires, keys, request_method=None):
+        container_info = get_container_info(env, self.app, swift_source='TU')
+        container_keys = get_tempurl_keys_from_metadata(
+            container_info.get('meta', []))
+
+        return ([(ak, ACCOUNT_SCOPE) for ak in account_keys] +
+                [(ck, CONTAINER_SCOPE) for ck in container_keys])
+
+    def _get_hmacs(self, env, expires, scoped_keys, request_method=None):
         """
         :param env: The WSGI environment for the request.
         :param expires: Unix timestamp as an int for when the URL
                         expires.
-        :param keys: Key strings, from the X-Account-Meta-Temp-URL-Key[-2] of
-                     the account.
+        :param scoped_keys: (key, scope) tuples like _get_keys() returns
         :param request_method: Optional override of the request in
                                the WSGI env. For example, if a HEAD
                                does not match, you may wish to
                                override with GET to still allow the
                                HEAD.
+
+        :returns: a list of (hmac, scope) 2-tuples
         """
         if not request_method:
             request_method = env['REQUEST_METHOD']
-        return [get_hmac(
-            request_method, env['PATH_INFO'], expires, key) for key in keys]
+        return [
+            (get_hmac(request_method, env['PATH_INFO'], expires, key), scope)
+            for (key, scope) in scoped_keys]
 
     def _invalid(self, env, start_response):
         """
@@ -455,6 +532,22 @@ class TempURL(object):
         else:
             body = '401 Unauthorized: Temp URL invalid\n'
         return HTTPUnauthorized(body=body)(env, start_response)
+
+    def _clean_disallowed_headers(self, env, start_response):
+        """
+        Validate the absense of disallowed headers for "unsafe" operations.
+
+        :returns: None for safe operations or swob.HTTPBadResponse if the
+                  request includes disallowed headers.
+        """
+        if env['REQUEST_METHOD'] in ('GET', 'HEAD', 'OPTIONS'):
+            return
+        for h in env:
+            if h in self.disallowed_headers:
+                return HTTPBadRequest(
+                    body='The header %r is not allowed in this tempurl' %
+                    h[len('HTTP_'):].title().replace('_', '-'))(
+                        env, start_response)
 
     def _clean_incoming_headers(self, env):
         """

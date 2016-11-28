@@ -31,7 +31,33 @@ class SwiftException(Exception):
     pass
 
 
+class PutterConnectError(Exception):
+
+    def __init__(self, status=None):
+        self.status = status
+
+
 class InvalidTimestamp(SwiftException):
+    pass
+
+
+class InsufficientStorage(SwiftException):
+    pass
+
+
+class FooterNotSupported(SwiftException):
+    pass
+
+
+class MultiphasePUTNotSupported(SwiftException):
+    pass
+
+
+class SuffixSyncError(SwiftException):
+    pass
+
+
+class RangeAlreadyComplete(SwiftException):
     pass
 
 
@@ -91,6 +117,10 @@ class PathNotDir(OSError):
     pass
 
 
+class ChunkReadError(SwiftException):
+    pass
+
+
 class ChunkReadTimeout(Timeout):
     pass
 
@@ -103,11 +133,19 @@ class ConnectionTimeout(Timeout):
     pass
 
 
+class ResponseTimeout(Timeout):
+    pass
+
+
 class DriveNotMounted(SwiftException):
     pass
 
 
 class LockTimeout(MessageTimeout):
+    pass
+
+
+class ThreadPoolDead(SwiftException):
     pass
 
 
@@ -169,6 +207,10 @@ class MimeInvalid(SwiftException):
     pass
 
 
+class APIVersionError(SwiftException):
+    pass
+
+
 class ClientException(Exception):
 
     def __init__(self, msg, http_scheme='', http_host='', http_port='',
@@ -222,3 +264,7 @@ class ClientException(Exception):
                 b += '  [first 60 chars of response] %s' \
                     % self.http_response_content[:60]
         return b and '%s: %s' % (a, b) or a
+
+
+class InvalidPidFileException(Exception):
+    pass
