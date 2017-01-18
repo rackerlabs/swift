@@ -1,3 +1,389 @@
+swift (2.5.0-0rax1) trusty; urgency=low
+
+  * 92abacf Put correct Etag and Accept-Ranges in EC 304 and 416 responses
+  * b76bf34 Fix replicator intersection exception when sync data to remote regions.
+  * 2caa5a6 added func-in-process-fast-post to mirror func
+  * 1c54d8b swift-ring-builder can't remove a device with zero weight
+  * 8c1976a Fix memory/socket leak in proxy on truncated SLO/DLO GET
+  * 74b12f2 Update .gitreview for stable/liberty
+  * 47eb6a3 authors and changelog update for 2.5.0
+  * 5070869 Validate against duplicate device part replica assignment
+  * a31ee07 Make sure we have enough .durable's for GETs
+  * 29c10db Add POST capability to ssync for .meta files
+  * 4b8f52b Fix copy requests to service accounts in Keystone
+  * 167f3c8 Update EC overview doc for PUT path
+  * 590e808 fix docstring: s/2xx/1xx/
+  * 8f1c740 Don't send commits for quorum *BAD* requests on EC
+  * 224c40f Fix inlines for test/unit/obj/test_server.py
+  * be9a8fb Imported Translations from Zanata
+  * 3f943cf Fix missing container update
+  * 2a8b455 Only yield the pending segment on error if it's a SegmentListingError
+  * 696186c Better error handling for EC PUT path when client goes away
+  * 25d5e68 Add the ability to specify ranges for SLO segments
+  * 3afdcf6 Fix proxy handling of EC client disconnect
+  * 371cd40 Imported Translations from Zanata
+  * 9046676 Fix client disconnect during multhiphase commit
+  * db0e0b8 diskfile: make get_ondisk_files return a dict
+  * 9e95613 Fix .coveragrc to prevent nose tests error
+  * 1fe8e43 Fix recon tests on SAIO with multiple policies
+  * a63f70c Reconstructor logging to omit 404 warnings
+  * 530102a Update EC Support on how to build an EC ring with replicas count
+  * 0d9142a Fix typo in Deployment Guide and add some formatting
+  * 460a7e4 Fixes recon bug with initially missing rings
+  * 9324ce8 Reconstructor GET excludes user_agent in log
+  * 369447e Fix purge for tombstone only REVERT job
+  * a3facce Fix invalid frag_index header in ssync_sender when reverting EC tombstones
+  * 71f6fd0 Allows to configure the rsync modules where the replicators will send data
+  * cb683d3 Imported Translations from Transifex
+  * e454245 [Labs] Update links to Cloud Admin Guide
+  * 58fcc07 Test if container_sweep is executed on unmounted devices
+  * e02609c Preserve traceback in swift-dispersion-report
+  * d06d4ad Included reference in swift.obj.diskfile to enumerate the string used for data file paths.
+  * 615c7a2 Adds useful dispersion info from changelog
+  * 3b87550 Replace a / b with a // b to use integer division where needed
+  * 524c89b Updated CHANGELOG, AUTHORS, and .mailmap for 2.4.0 release.
+  * 05de130 Make ssync_sender send valid chunked requests
+  * 993ee4e Remove duplicate X-Backend-Storage-Policy-Index key
+  * 893f30c EC GET path: require fragments to be of same set
+  * 58a10a5 Add test that a tempurl POST cannot set a DLO manifest header
+  * d4409c0 Better scoping for tempurls, especially container tempurls
+  * 10b2939 Disallow unsafe tempurl operations to point to unauthorized data
+  * c690bcb Fix dispersion-reports error message
+  * 8086a0e Restrict PyECLib version to 1.0.7
+  * 17efa34 Fix EC GET backend stream iteration state
+  * 25dc722 Fix swob.Range docstring
+  * a7b84f4 Allow pep8 of a single file
+  * 6a35d47 Follow up patch to fix a multiline import NITPIC
+  * edde558 Fix typo of a comment in replicator
+  * 6151c6c Fix use of delimiter in account listings
+  * a38f63e Use correct Storage-Policy header for REPLICATE requests
+  * ae129bf eventlet.posthook related code needn't anymore
+  * 4500ff3 Fix the missing SLO state on fast-post
+  * 69e7424 Add container sync probe test to SAIO default set
+  * 8b1df99 Minor cleanup handoff mode warnings
+  * a1ceab5 New troubleshooting case in documentation.
+  * 4765189 Improving statistics sent to Graphite.
+  * ab16370 Emit warning log in object replicator
+  * be66aa8 Fix 500 for bogus Range request to 0-byte object.
+  * 4b6836b Fix the comment in [1].
+  * 923238a test/(functional/probe):Replace python print operator with print function (pep H233, py33)
+  * 47dc319 Add OpenStack release names to changelog
+  * 1835087 pep8: Don't override '_' symbol
+  * c7eb589 pep8: Fix usage of the l10n _('...') function
+  * 7bea148 pep8: replace deprecated calls to assert_()
+  * 8aaacbf pep8: Fix hacking H232 warnings (octal)
+  * 5b01c5e Add unit test for container_update for unmounted device
+  * d6267c1 Keep user id and project id in subrequests env
+  * eaa0064 move global statement up a few lines
+  * 1a81cda Doc instructions for post rebase steps
+  * 79ba4a8 Enable Object Replicator's failure count in recon
+  * eeb0fa4 Make swift-ring-builder filename usage more consistent
+  * b75d2a4 Quorum on durable response is too low
+  * fa35e38 Fix some minor typos
+  * 5b246e8 Fix EC range GET/COPY handling
+  * 7064706 Fix 500 in versioned writes with bad Destination
+  * 035a411 versioned writes middleware
+  * 968c91a Replace assertTrue(not <condition>) with assertFalse(<condition>)
+  * 4ac1fea Fix some spelling typo in comments
+  * 9456af3 pep8 fix: assertEquals -> assertEqual
+  * 1952451 Fix a spelling typo in comment
+  * c35cc13 pep8 fix: assertEquals -> assertEqual
+  * 239e94e pep8 fix: assertEquals -> assertEqual
+  * 49b9ba3 pep8 fix: assertEquals -> assertEqual
+  * 81816be Fix shebang of commands
+  * 652f0f9 Having said H, I, J, we ought to say K
+  * ed3aec2 pep8 fix: assertEquals -> assertEqual
+  * f449e91 pep8 fix: assertEquals -> assertEqual
+  * 6594bbe pep8 fix: assertEquals -> assertEqual
+  * 89f5906 +Document method to avoid rsync filling root drive
+  * f0d5188 Add extra_header_count to document and config.
+  * 7071762 Fix TypeError if backend response doesn't have expected headers
+  * 01848c5 Speed up reaper for a big account delete and some better error handling
+  * 5b24b22 Imported Translations from Transifex
+  * 8d06f56 Fix typo of 'receive'
+  * 310ac18 Convert docstring to a comment in test_denied_DELETE_of_versioned_object unit test.
+  * 21a7b4a Test that get_hashes ignores only removed hash dir
+  * 44917c8 Handle removed suffix dirs the same as empty suffix dirs
+  * cf4d50b Make test_proxy work independent of env vars
+  * 67513fc Adding bandit for security static analysis testing in swift
+  * 768d7ab Add a probetest for HUP/reload
+  * 207dd9b Fix regression in WSGI server SIGHUP behavior
+  * bcd00d9 Refactor diskfile
+  * 9cb7eb4 Update hacking to 0.10.0
+  * 389a97e Fix pep8 E warning for hacking 0.10
+  * d719064 Fix warning pep8 E128 warning of hacking 0.10
+  * a0db56d Fix pep8 E265 warning of hacking 0.10
+  * 3457858 Remove error_suppression_interval, error_suppression_limit options.
+  * 5a73833 Swift documentation for first-time contributors.
+  * 5b5c882 Remove unused code in swift/obj/server.py
+  * 0c27cb0 Imported Translations from Transifex
+  * c5b5cf9 test/unit: Replace python print operator with print function (pep H233, py33)
+  * 117b619 functests: use assertIn and assertNotIn
+  * 8fe8bee test/(functional, probe): Replace "self.assert_" by "self.assertTrue"
+  * 4a6e0cc Rename WsgiStringIO -> WsgiBytesIO.
+  * 5ee742c Modifying Lambda function tuple usage for python3
+  * 6f89f71 Filter Etag key from ssync replication-headers
+  * e2f6913 Fix string formatting in dispersion cli command
+  * 83025ff Use right most occurrence object dir in diskfile.extract_policy
+  * 363a256 Support keystone v3 domains in swift-dispersion
+  * 3d9b2d0 Fix swift-object-info to show policy index at deep working directory
+  * e24d7c3 Use six to fix imports on Python 3
+  * 964869a Fix six typos on swift documentation
+  * dd2f1be Time synchronization check in recon.
+  * 89f705e Imported Translations from Transifex
+  * cbcfb74 Cleanup nits from container_update_timeout
+  * f563a42 Updated tox setup instructions on Development Guidelines
+  * a65e9db Removing commented out code in test/unit/account/test_backend.py
+  * 99d0527 Fix 499 client disconnected on COPY EC object
+  * 2289137 do container listing updates in another (green)thread
+  * 62ed4f8 Add two functional tests for delimiter.
+  * 2d6c5fe Fix Associated Projects link on Getting Started
+  * cd7b2db unit tests: Replace "self.assert_" by "self.assertTrue"
+  * c3cc98b Add comment about ResumingGetter.used_source_etag
+  * 06326d7 Metaclass Python 3.x Compatibility
+  * 317fa1a Minor change in development saio setup doc
+  * 39621b8 Deprecated xreadlines() usage fixed
+  * dde34c4 Modify zip usage for python3 where necessary.
+  * faff98e Replace python print operator with print function (pep H233, py33)
+  * 8753e45 Replace StringIO with BytesIO for WSGI input
+  * 6e70f3f Get StringIO and cStringIO from six.moves
+  * 51f806d remove Python 2.6 from the classifier
+  * 278adf5 Make logic of unit tests responsive to the method names
+  * c366ecf Fix a minor python issue related with string.split
+  * c8131c6 sys.exc_type/exc_value/exc_traceback are Deprecated
+  * 1cc3eff Fixes for mock 1.1
+  * ff192cf Replace reduce and unichr , these are no longer available in py3
+  * 4beceab Imported Translations from Transifex
+  * 56ee39a Ring builder code clean up follow up patch
+  * 6cafd0a Fix Container Sync example
+  * 1252386 Add CORS unit tests to base
+  * 39b6ef6 Fix reconstructor stats mssage.
+  * e87a746 add domain_remap to /info
+  * 1247310 Cleanup error messages in ECDiskFileWriter.commit
+  * bfbda38 Add save command to ring-builder-analyzer
+  * c907107 cPickle is deprecated in py3, replacing it from six.moves
+  * bd3717d update AUTHORS file
+  * cd20961 Replace dict.iteritems() with dict.items() in bin directory of swift.
+  * 8eca02d Replace xrange() with six.moves.range()
+  * 10f3672 Fix Python 3 issues
+  * 2328983 Stop moving partitions unnecessarily when overload is on.
+  * ccf0758 Add ring-builder analyzer.
+  * e860ec1 Ignore invalid PIDs in swift-init
+  * 0a6f2ab Correcting minor grammatical errors
+  * 4d4db05 After the .durable has been written, fsync the directory.
+  * 86033ba EC tests should use ECDiskFileManager
+  * d4d7c0e Fix race in test_server.TestObjectController.test_PUT_ssync_multi_frag
+  * a88bd6e fix api overview document
+  * c95a0ef Make ssync_sender a better HTTP client
+  * 44b76a1 EC Reconstructor: Do not reconstruct existing fragments.
+  * d124ce5 Fix ValueError in ssync_receiver
+  * edfca86 Increase httplib._MAXHEADERS
+  * 81ceee0 Add one more test for ssync_receiver
+  * c2c1366 Fixed Errors in Swift-Form Post middleware section rst.
+  * 514daea Fixed Formatting Error in Swift -Form Post middleware section.
+  * e70b665 Replace dict.iteritems() with dict.items()
+  * e6165a7 Add policy support to dispersion tools
+  * e5c962a Replace xrange() with six.moves.range()
+  * 4a5b851 Add note about updatedb to the docs
+  * ac8a769 EC Ssync:  Update parms to include node and frag indices
+  * 12d8a53 Get better at closing WSGI iterables.
+  * df134df Allow 1+ object-servers-per-disk deployment
+  * af72881 Use just IP, not port, when determining partition placement
+  * 09e7477 Replace it.next() with next(it) for py3 compat
+  * 5ad369c Add six requirement
+  * 037a0c5 Object are sorted and concatenated by swift in cardinal order.
+  * 11e5c4a Allow default reseller prefix in domain_remap middleware
+  * c953e8c The hash_cleanup_listdir function should only be called when necessary.
+  * 93de6c7 Add metadata size tests on the border
+  * af734b3 Change usage help and Attention messages to warnings
+  * 4f2ed8b EC: support multiple ranges for GET requests
+  * f1f4bb3 Fix testing issues
+  * 2759a6f Handle Disk IO error Exception in swift account auditor
+  * 1bef06e Don't quarantine on read_metadata ENOENT
+  * 8b4af92 Tighten up overall metadata size tests
+  * b4c1d73 Make swift-recon compatible for servers without storage policies
+  * 38787d0 Remove simplejson from staticweb
+  * 736cf54 Remove simplejson from tests
+  * 68c30b8 Imported Translations from Transifex
+  * 5374ba3 drop Python 2.6 testing support
+  * 191f2a0 Remove _ensure_flush() from SSYNC receiver
+  * 3aa06f1 Make SSYNC receiver return a reponse when initial checks fail
+  * bb71657 Allow SLO PUTs to forgo per-segment integrity checks
+  * a1c3270 Remove simplejson from swift-recon
+  * a3559ed Exclude local_dev from sync partners on failure
+  * 666bf06 EC: don't 503 on marginally-successful PUT
+  * e7c8c57 fixup!Patch of "parse_content_disposition" method to meet RFC2183
+  * af8d842 Replaced setting run_pause with standard interval
+  * f11d92d Add swift-durability-calculator line to docs
+  * f864092 Add Swift Inspector to assoicated projects
+  * e54781a add object post and delete methods to BaseObjectController
+  * ab9f634 Add process name checking into swift-init
+  * aa4866e move replication code to ReplicatedObjectController
+  * 025c4c4 Remove confusable query string on post as copy
+  * 98b725f Cleanup and extend end to end ssync tests
+  * 518262a Remove 1 line of dead code from EC reconstructor
+  * 29f4393 Remove workaround for old eventlet version
+  * 90b84d3 Properly re-raise exceptions in proxy_logging
+  * 664a632 Update my mailmap entry
+  * 0b20a18 Spell "rebalance" right in swift-ring-builder.1
+  * 1faad24 X-Auth-Token should be a bytestring.
+  * 55dd705 Add missing statsd metrics section for object-reconstructor
+  * c77c79b Imported Translations from Transifex
+  * 9421504 Bump up a timeout in a test
+  * 03536dbb Fix incorrect passing of file object to fsync()
+  * bfbc94c Fix intermittent container replicator test failure
+  * dbb9d4b Add missing docstring in direct_client
+  * 8cdf0fd Fix account replication during pre-storage-policy upgrade
+  * 0338038 Simplify ring.builder.RingBuilder.__deepcopy__
+  * 43ace3c Make RingBuilders deep-copy-able
+  * 215cd55 Bulk upload: treat user xattrs as object metadata
+  * f8dee76 Release Import of Translations from Transifex
+  * cd7c58e Use reconstruct insetad of decode/encode
+  * 281cb1c Bump PyECLib version from 1.0.3 to 1.0.7
+  * 51e31c5 Don't apply the wrong Etag validation to rebuilt fragments
+  * 2080f7d Fix tempauth acl checks when simplejson has no speedups
+  * 27f6fba Use reconstruct insetad of decode/encode
+  * 0c391d6 SAIO instructions: ensure ~/bin exists before copying into it
+  * c5c281b Included step in development_saio.rst for installing dependencies in requirements.txt.
+  * 2203b46 Bump PyECLib version from 1.0.3 to 1.0.7
+  * f6482bd Set default branch to stable/kilo
+  * a2a5b6a Functional test for SLO PUT overwriting one of its own segments
+  * e4d326b Fix conflict SLO reponse
+  * 38ae7bb Make the reaper use same timestamp for replica deletes
+  * e440d6a Fix best response to return correct status
+  * 57011d5 More user-friendly output for object metadata
+  * a162c2b Imported Translations from Transifex
+  * 52b1021 Don't apply the wrong Etag validation to rebuilt fragments
+  * 46bd671 Small minor refactor on ec diskfile
+  * 193fe9a Update swift-recon doc with more options
+  * 663ccd4 More tests for swift recon
+  * c8e943c Imported Translations from Transifex
+  * 5ef2e9e fixup random test failure
+  * 86920f3 2.3.0 authors and changelog updates
+  * 4aba2fb Check if REST API version is valid
+  * e16df14 Add test for swift_recon.disk_usage
+  * 66fb207 Add lowest option to swift-recon disk usage output
+  * b76d8c5 Fix broken test_policy_IO_override test
+  * 26bff69 Fix untranslatable string
+  * 749bdac Refactor the getting roles logic in _keystone_identity
+  * 8a1453e Support HTTP_X_SERVICE_IDENTITY_STATUS in keystoneauth
+  * d3213fb Check if device name is valid when adding to the ring
+  * 3c419df Add additional func tests for TempURLs
+  * 8f5d4d2 Erasure Code Documentation
+  * 647b66a Erasure Code Reconstructor
+  * b2189ef Fix account reaper for > 3 replicas
+  * 61a9d35 Update container sync to use internal client
+  * decbcd2 Foundational support for PUT and GET of erasure-coded objects
+  * b1eda4a Allow sending object metadata after data
+  * fa89064 Per-policy DiskFile classes
+  * dd9d974 Prevent unauthorized delete in versioned container
+  * a707829 Update test infrastructure
+  * ed54066 Add support for policy types, 'erasure_coding' policy
+  * 16ee994 Set connection timeout in container sync
+  * 7bdb826 Select policy when running functional test
+  * 376ecc7 make `git review` easier
+  * 8d3b3b2 Add some debug output to the ring builder
+  * cf21db4 Add Swift Design Principles to CONTRIBUTING.md
+  * a812941 Bump eventlet version to 0.16.1
+  * 75e8454 Clarify the description of backward compatibility in Keystoneauth's docstring
+  * 76b106f Fix common misspellings
+  * a288d05 Imported Translations from Transifex
+  * 0a46793 Add swift-recon feature to track swift-drive-audit error count
+  * 23d0842 Refactoring the PUT method
+  * c3d2602 Fix typo in swift/test/unit/account/test_backend.py
+  * 7e64c81 Enable in-process functional test policy to be configured
+  * 9ae0a07 Fix a lack of method arguments at tempauth
+  * a624a59 Tighten up recon middleware unit tests
+  * 15b83f6 Test swift-object-info opens meta and ts files
+  * 3f1feae Imported Translations from Transifex
+  * 3d3db0a Bump PyECLib version to >= 1.0.3
+  * fdb2ec0 Add the missing "file" keyword for print
+  * 51a8f9c Imported Translations from Transifex
+  * 99a3d1a Fix the prefix of messages caputured from stderr
+  * 9baafe7 Allow swift-object-info to inspect .meta and .ts files
+  * b73e49e Fix param description on _make_request
+  * 98911be Small optimization to ring builder.
+  * 7f482e9 fixing small typos in associated projects doc
+  * 0eb27b9 Handle ENOSPC in mkstemp()
+  * a6f630f fsync() on directories
+  * 4f9a3a3 Fixed links in multi-server Swift documentation
+  * 9c33bbd Allow rsync to use compression
+  * 13cc0ef Minor change to the service token sample test config
+  * 60cf18f Imported Translations from Transifex
+  * 2ff66a5 Fix object replicator partition cleanup
+  * da6f8d8 fixed ugly code pattern in probe tests
+  * 555e989 Make functests retry auth immediately
+  * e3cbfc5 Add tempauth back to /info
+  * a248a5c Ring checker in swift-recon
+  * 12e9826 Enable override of container update headers
+  * 268e316 Clean up a couple of deprecated uses of e.message
+  * d62df39 Clean up a couple deprecation warnings
+  * 512b6ca swift-ring-builder remove doesn't print message (tabbing error)
+  * 0e709a1 Fix failing tox -e py26 tests
+  * 89397c5 Add multiple reseller prefixes and composite tokens
+  * 16b435a Fix ContainerBroker to use policy-0 in default
+  * db29ffc Make proxy_logging close the WSGI iterator
+  * 4ca08cc Update guest VM OS recommendation in SAIO doc
+  * 7bc09df Add support of x-remove- headers for container-sync
+  * f578a35 Fix efficient replication handoff delete
+  * 949804e update the getting started doc
+  * dd1a05f Imported Translations from Transifex
+  * 7acc291 added swift_source to ratelimit info calls
+  * 023e29f Add functional tests for container TempURLs
+  * ca0fce8 more probe test refactoring
+  * 2655465 Promote some of the best developers I know to CORE Emeritus
+  * 596042b Minor cleanup post efficent multi-region replication
+  * b8e85a4 Imported Translations from Transifex
+  * a4ffd1d move test comments around
+  * 82e5090 Fix ssync send_delete
+  * a9b5982 Fix account-reaper
+  * 2c1b5af refactor probe tests
+  * f5b533f Update TempURL docs to include containers
+  * f5ab305 Fix logger test coupling
+  * ca90be4 Add developer tools section to associated projects
+  * f5d5094 Logging a policy index when container PUT request conflicts
+  * 69797ef small bug with account to account copy
+  * 843ce7e API document update for container-level tempurl/formpost
+  * 489dd5f Add support for container TempURL Keys
+  * 20ca279 Efficient Replication for Distributed Regions
+  * 2e5eb7d Fix swift-recon --all help message
+  * f96b8e4 Included sysmeta in the object info
+  * a82bfb2 Make container GET call authorize when account not found
+  * b54532c Imported Translations from Transifex
+  * b45b83f Correct the config default for delay_auth_decision
+  * 74563ec Tests for the base class of storage nodes
+  * b5f8c59 Add `swift-scality-backend` to associated projects
+  * 2eba998 added swift-ui browser to associated projects
+  * d85371c Don't skip account acl functional tests
+  * 5a0f8f1 Update auth_token section in documentation
+  * a270dca Prevent redundant commenting by drive-audit
+  * efb39a5 Allow hostnames for nodes in Rings
+  * d8fdbc2 Typos fixed
+  * c8f02a8 Add server type in OPTIONS response
+  * cec0066 Remove deprecated config variables
+  * 8607833 Output account-reaper's logs for PolicyError
+  * 562f7e8 Allow set_overload to take value as percent
+  * 402a62e 2.2.2 changelog and authors update
+  * 77e9267 Fix typing mistake for doc
+  * 9b8dd06 Don't set the already set Connection: close
+  * 376dc5a don't print cached dispersion if it's a lie
+  * afdbf73 Output logs of policy index
+  * 3ac43e8 Allow per-policy overrides in object replicator.
+  * f58f397 Make ThreadPools deallocatable.
+  * e5ca7e2 Optimize replication of targeted devices/partitions.
+  * c6fde6d Implement OPTIONS verb for storage nodes.
+  * f8fa1a9 Show each policy's information on quarantined files in recon
+  * 0bb690d Exclude empty tiers from max_replicas
+  * a0977ab dlo: Update doc about manifest containing data
+  * 2012339 Make more memcache options configurable
+  * 4ce4f98 Drop redundant check in SLO segment-size validation
+  * a8bd2f7 Add dispersion command to swift-ring-builder
+  * 3782bf1 Remove the X-Newest pre-flight request on X-Timestamp
+  * ba8114a Improve object-replicator startup time.
+  * 22b6584 Make probe tests tolerate deprecated policies
+
+ -- Alan Erwin <alan.erwin@rackspace.com>  Tue, 14 Apr 2015 14:15:02 +0000
+
 swift (2.2.1-1rax3) lucid; urgency=medium
 
   * fe84f4b Prevent unauthorized delete in versioned container
@@ -96,7 +482,7 @@ swift (2.2.1-1rax1) lucid; urgency=medium
 
 swift (2.2.0-1rax3) lucid; urgency=medium
 
-  * This is the same code as in 2.2.0~rax3 version 
+  * This is the same code as in 2.2.0~rax3 version
   * Just updated the formatting style for the changelog versioning
 
  -- Marcelo Martins <marcelo.martins@rackspace.com>  Fri, 07 Nov 2014 14:15:02 +0000
